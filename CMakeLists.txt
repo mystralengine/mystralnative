@@ -235,31 +235,13 @@ if(MYSTRAL_USE_WGPU)
 endif()
 
 # Dawn
-# On Windows: Use dawn_combined.lib from library-builder static Skia build (skia-win-static)
-#             This is built with /MT (static CRT) to match Skia
-# On other platforms: Use official Dawn releases from https://github.com/google/dawn/releases
+# Use official Dawn releases from https://github.com/google/dawn/releases
+# Note: dawn_combined.lib from Skia only contains proc stubs, not actual implementation
 if(MYSTRAL_USE_DAWN)
     set(DAWN_FOUND OFF)
 
-    # Windows: First check for dawn_combined.lib in Skia directory (from library-builder)
-    # This is the static build with /MT that matches Skia
-    if(WIN32)
-        set(SKIA_DAWN_LIB ${THIRD_PARTY_DIR}/skia/build/win-gpu/lib/Release/x64/dawn_combined.lib)
-        set(SKIA_DAWN_INCLUDE ${THIRD_PARTY_DIR}/skia/build/include/dawn)
-        # The webgpu/webgpu.h headers are at third_party/externals/dawn/include/
-        set(SKIA_DAWN_WEBGPU_INCLUDE ${THIRD_PARTY_DIR}/skia/build/include/third_party/externals/dawn/include)
-        if(EXISTS ${SKIA_DAWN_LIB} AND EXISTS ${SKIA_DAWN_INCLUDE})
-            set(DAWN_LIBRARY ${SKIA_DAWN_LIB})
-            # Use the path where webgpu/webgpu.h lives
-            set(DAWN_INCLUDE_DIR ${SKIA_DAWN_WEBGPU_INCLUDE})
-            set(DAWN_FOUND ON)
-            message(STATUS "Found Dawn (static, from Skia build): ${DAWN_LIBRARY}")
-            message(STATUS "Dawn headers: ${DAWN_INCLUDE_DIR}")
-        endif()
-    endif()
-
-    # Fallback: Official Dawn releases
-    if(NOT DAWN_FOUND)
+    # Use official Dawn releases (has webgpu_dawn.lib with actual implementation)
+    if(TRUE)
         set(DAWN_DIR ${THIRD_PARTY_DIR}/dawn)
         if(EXISTS ${DAWN_DIR})
             # Find the platform-specific subdirectory (contains commit hash in name)

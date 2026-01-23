@@ -125,6 +125,12 @@ jobs:
           if [ -d "third_party/sdl3/SDL3.xcframework/macos-arm64_x86_64/SDL3.framework" ]; then
             cp -R third_party/sdl3/SDL3.xcframework/macos-arm64_x86_64/SDL3.framework artifacts/
           fi
+          # Include examples for users to run immediately
+          mkdir -p artifacts/examples/assets
+          cp examples/*.js artifacts/examples/ || true
+          cp examples/assets/*.glb artifacts/examples/assets/ 2>/dev/null || true
+          cp examples/assets/*.gltf artifacts/examples/assets/ 2>/dev/null || true
+          cp examples/assets/*.hdr artifacts/examples/assets/ 2>/dev/null || true
           cd artifacts && zip -r ../mystral-${{ matrix.name }}.zip .
 
       - name: Upload artifact
@@ -137,7 +143,8 @@ jobs:
   # Linux Builds
   # =============================================================================
   build-linux:
-    runs-on: ubuntu-24.04
+    # Use Ubuntu 22.04 for broader glibc compatibility (2.35 vs 2.38/2.39 on 24.04)
+    runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
@@ -235,6 +242,12 @@ jobs:
           cp build/mystral artifacts/
           cp build/libmystral-runtime.a artifacts/ || true
           cp third_party/sdl3/installed/lib/libSDL3.so* artifacts/ || true
+          # Include examples for users to run immediately
+          mkdir -p artifacts/examples/assets
+          cp examples/*.js artifacts/examples/ || true
+          cp examples/assets/*.glb artifacts/examples/assets/ 2>/dev/null || true
+          cp examples/assets/*.gltf artifacts/examples/assets/ 2>/dev/null || true
+          cp examples/assets/*.hdr artifacts/examples/assets/ 2>/dev/null || true
           cd artifacts && zip -r ../mystral-${{ matrix.name }}.zip .
 
       - name: Upload artifact
@@ -301,8 +314,9 @@ jobs:
         shell: bash
         run: |
           export PATH="/c/Program Files/7-Zip:$PATH"
-          # Use skia-win-static which includes both Skia and Dawn built with /MT
-          # This avoids CRT mismatch between Skia (/MT) and regular Dawn (/MD)
+          # Download official Dawn release (has webgpu_dawn.lib with actual implementation)
+          node scripts/download-deps.mjs --only dawn
+          # Also get Skia static for /MT CRT compatibility
           node scripts/download-deps.mjs --only skia-win-static
 
       - name: Install vcpkg dependencies
@@ -344,6 +358,12 @@ jobs:
           cp build/Release/mystral.exe artifacts/ || cp build/mystral.exe artifacts/
           cp build/Release/mystral-runtime.lib artifacts/ || cp build/mystral-runtime.lib artifacts/ || true
           cp third_party/sdl3/bin/SDL3.dll artifacts/ || true
+          # Include examples for users to run immediately
+          mkdir -p artifacts/examples/assets
+          cp examples/*.js artifacts/examples/ || true
+          cp examples/assets/*.glb artifacts/examples/assets/ 2>/dev/null || true
+          cp examples/assets/*.gltf artifacts/examples/assets/ 2>/dev/null || true
+          cp examples/assets/*.hdr artifacts/examples/assets/ 2>/dev/null || true
           cd artifacts && 7z a ../mystral-${{ matrix.name }}.zip .
 
       - name: Upload artifact
