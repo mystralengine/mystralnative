@@ -250,9 +250,14 @@ if(MYSTRAL_USE_DAWN)
 
             if(EXISTS ${DAWN_LIB_PATH})
                 set(DAWN_LIBRARY ${DAWN_LIB_PATH})
-                # Dawn headers are in Skia's third_party/externals/dawn subdirectory
-                # The path structure is: build/include/third_party/externals/dawn/include/webgpu/webgpu.h
-                set(DAWN_INCLUDE_DIR ${SKIA_TARGET_DIR}/build/include/third_party/externals/dawn/include)
+                # Dawn headers in Skia build are split across two locations:
+                # 1. build/include/third_party/externals/dawn/include/webgpu/webgpu.h (wrapper)
+                # 2. build/include/dawn/webgpu.h (actual definitions)
+                # The wrapper includes "dawn/webgpu.h", so we need both paths
+                set(DAWN_INCLUDE_DIR
+                    ${SKIA_TARGET_DIR}/build/include/third_party/externals/dawn/include
+                    ${SKIA_TARGET_DIR}/build/include
+                )
                 set(DAWN_FOUND ON)
                 message(STATUS "Found Dawn combined library from Skia build")
                 message(STATUS "Dawn includes: ${DAWN_INCLUDE_DIR}")
