@@ -645,8 +645,12 @@ async function main() {
   // Android deps (only downloaded with --only or --android)
   const androidDeps = ['wgpu-android', 'sdl3-android'];
 
+  // Windows-specific deps (only downloaded with --only)
+  // skia-win-static: Static Skia+Dawn build from library-builder with /MT
+  const windowsDeps = ['skia-win-static'];
+
   // All available deps
-  const allDeps = [...desktopDeps, ...iosDeps, ...androidDeps];
+  const allDeps = [...desktopDeps, ...iosDeps, ...androidDeps, ...windowsDeps];
 
   let depsToDownload;
   if (onlyIndex !== -1) {
