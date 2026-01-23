@@ -290,11 +290,15 @@ if(MYSTRAL_USE_DAWN)
     if(WIN32)
         set(SKIA_DAWN_LIB ${THIRD_PARTY_DIR}/skia/build/win-gpu/lib/Release/x64/dawn_combined.lib)
         set(SKIA_DAWN_INCLUDE ${THIRD_PARTY_DIR}/skia/build/include/dawn)
+        # The webgpu/webgpu.h headers are at third_party/externals/dawn/include/
+        set(SKIA_DAWN_WEBGPU_INCLUDE ${THIRD_PARTY_DIR}/skia/build/include/third_party/externals/dawn/include)
         if(EXISTS ${SKIA_DAWN_LIB} AND EXISTS ${SKIA_DAWN_INCLUDE})
             set(DAWN_LIBRARY ${SKIA_DAWN_LIB})
-            set(DAWN_INCLUDE_DIR ${THIRD_PARTY_DIR}/skia/build/include)
+            # Use the path where webgpu/webgpu.h lives
+            set(DAWN_INCLUDE_DIR ${SKIA_DAWN_WEBGPU_INCLUDE})
             set(DAWN_FOUND ON)
             message(STATUS "Found Dawn (static, from Skia build): ${DAWN_LIBRARY}")
+            message(STATUS "Dawn headers: ${DAWN_INCLUDE_DIR}")
         endif()
     endif()
 
