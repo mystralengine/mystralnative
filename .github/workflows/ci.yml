@@ -157,9 +157,9 @@ jobs:
   # =============================================================================
   build-linux:
     if: ${{ inputs.build_filter == 'all' || inputs.build_filter == 'linux-only' }}
-    # Use Ubuntu 22.04 for glibc 2.35 compatibility
-    # This works on most Linux distros from the last 3+ years
-    runs-on: ubuntu-22.04
+    # Use Ubuntu 24.04 to match pre-built Skia libraries
+    # Note: Pre-built Skia uses newer glibc symbols, so binaries require Ubuntu 24.04+
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
       fail-fast: false

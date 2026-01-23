@@ -1,5 +1,6 @@
 #pragma once
 
+#include <map>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -64,7 +65,7 @@ private:
         bool boolVal = false;
         double numberVal = 0.0;
         std::string stringVal;
-        std::unordered_map<std::string, JsonValue> objectVal;
+        std::map<std::string, JsonValue> objectVal;  // Use std::map for recursive type (gcc 11 compat)
         std::vector<JsonValue> arrayVal;
     };
 
