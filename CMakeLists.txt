@@ -243,6 +243,14 @@ if(MYSTRAL_USE_DAWN)
         # Windows: Look for dawn_combined.lib in the Skia build directory
         # The skia-win-static dependency from library-builder includes Dawn with full
         # D3D11/D3D12 backends, built with /MT static CRT to match Skia
+
+        # Set up Skia paths early since Dawn depends on them
+        # (normally defined later in the CMakeLists, but needed here for Dawn detection)
+        set(SKIA_DIR ${THIRD_PARTY_DIR}/skia)
+        set(SKIA_TARGET_DIR ${SKIA_DIR})
+        set(SKIA_PLATFORM_DIR "win-gpu")
+        set(SKIA_LIB_SUBDIR "x64")
+
         if(EXISTS ${SKIA_TARGET_DIR})
             # dawn_combined.lib is in the same directory as skia.lib
             set(DAWN_LIB_PATH ${SKIA_TARGET_DIR}/build/${SKIA_PLATFORM_DIR}/lib/Release/${SKIA_LIB_SUBDIR}/dawn_combined.lib)
