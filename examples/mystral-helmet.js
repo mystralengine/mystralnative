@@ -8002,6 +8002,8 @@ class GlobalResources {
   _shadowsInitialized = false;
   constructor(device, options) {
     const shadowsEnabled = options?.shadowsEnabled ?? true;
+    const shadowResolution = options?.shadowResolution ?? 2048;
+    const pointShadowResolution = options?.pointShadowResolution ?? 1024;
     this.sceneUniforms = new SceneUniforms(device);
     this.objectBuffer = new ObjectBuffer(device);
     this.hiZBuffer = new HiZBuffer(device, 1, 1);
@@ -8023,17 +8025,18 @@ class GlobalResources {
     });
     if (shadowsEnabled) {
       const initialShadowLayers = Math.max(CASCADE_COUNT, activeShadowLayers);
-      console.log(`GlobalResources: Creating shadow atlas 2048x2048x${initialShadowLayers} (${(2048 * 2048 * initialShadowLayers * 4 / 1024 / 1024).toFixed(1)} MB)`);
+      console.log(`GlobalResources: Creating shadow atlas ${shadowResolution}x${shadowResolution}x${initialShadowLayers} (${(shadowResolution * shadowResolution * initialShadowLayers * 4 / 1024 / 1024).toFixed(1)} MB)`);
       this.shadowAtlas = device.createTexture({
         label: "Shadow Atlas (Array)",
-        size: [2048, 2048, initialShadowLayers],
+        size: [shadowResolution, shadowResolution, initialShadowLayers],
         format: "depth32float",
         usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
       });
-      console.log(`GlobalResources: Creating point shadow atlas 1024x1024x${MAX_SHADOW_LIGHTS * 6} (${(1024 * 1024 * MAX_SHADOW_LIGHTS * 6 * 4 / 1024 / 1024).toFixed(1)} MB)`);
+      const pointLayers = MAX_SHADOW_LIGHTS * 6;
+      console.log(`GlobalResources: Creating point shadow atlas ${pointShadowResolution}x${pointShadowResolution}x${pointLayers} (${(pointShadowResolution * pointShadowResolution * pointLayers * 4 / 1024 / 1024).toFixed(1)} MB)`);
       this.pointShadowAtlas = device.createTexture({
         label: "Point Shadow Atlas (Cube Array)",
-        size: [1024, 1024, MAX_SHADOW_LIGHTS * 6],
+        size: [pointShadowResolution, pointShadowResolution, pointLayers],
         format: "r32float",
         usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
       });
@@ -8082,26 +8085,42 @@ class GlobalResources {
     this.hiZBuffer.resize(width, height);
     this._bindGroupsDirty = true;
   }
-  resizeShadows(resolution, maxLights, device) {
+  resizeShadows(resolution, maxLights, device, pointShadowResolution) {
     if (!this._shadowsInitialized) {
       return;
     }
+    const pointRes = pointShadowResolution ?? 1024;
+    let needsBindGroupRecreate = false;
     const spotLightLayers = Math.max(0, Math.min(MAX_SHADOW_LIGHTS, maxLights));
     const layers = CASCADE_COUNT + spotLightLayers;
-    if (this.shadowAtlas && this.shadowAtlas.width === resolution && this.shadowAtlas.depthOrArrayLayers === layers) {
-      return;
+    if (this.shadowAtlas && (this.shadowAtlas.width !== resolution || this.shadowAtlas.depthOrArrayLayers !== layers)) {
+      if (this.shadowAtlas)
+        this.shadowAtlas.destroy();
+      activeShadowLayers = layers;
+      console.log(`GlobalResources: Resizing shadow atlas to ${resolution}x${resolution}x${layers} (${(resolution * resolution * layers * 4 / 1024 / 1024).toFixed(1)} MB)`);
+      this.shadowAtlas = device.createTexture({
+        label: "Shadow Atlas (Array)",
+        size: [resolution, resolution, layers],
+        format: "depth32float",
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
+      });
+      needsBindGroupRecreate = true;
     }
-    if (this.shadowAtlas)
-      this.shadowAtlas.destroy();
-    activeShadowLayers = layers;
-    console.log(`GlobalResources: Resizing shadow atlas to ${resolution}x${resolution}x${layers} (${(resolution * resolution * layers * 4 / 1024 / 1024).toFixed(1)} MB)`);
-    this.shadowAtlas = device.createTexture({
-      label: "Shadow Atlas (Array)",
-      size: [resolution, resolution, layers],
-      format: "depth32float",
-      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
-    });
-    this.createBindGroup(device);
+    const pointLayers = MAX_SHADOW_LIGHTS * 6;
+    if (this.pointShadowAtlas && this.pointShadowAtlas.width !== pointRes) {
+      this.pointShadowAtlas.destroy();
+      console.log(`GlobalResources: Resizing point shadow atlas to ${pointRes}x${pointRes}x${pointLayers} (${(pointRes * pointRes * pointLayers * 4 / 1024 / 1024).toFixed(1)} MB)`);
+      this.pointShadowAtlas = device.createTexture({
+        label: "Point Shadow Atlas (Cube Array)",
+        size: [pointRes, pointRes, pointLayers],
+        format: "r32float",
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
+      });
+      needsBindGroupRecreate = true;
+    }
+    if (needsBindGroupRecreate) {
+      this.createBindGroup(device);
+    }
   }
   getShadowAtlasLayers() {
     return this.shadowAtlas?.depthOrArrayLayers ?? activeShadowLayers;
@@ -9980,7 +9999,8 @@ class RenderGraph {
       return;
     const shadowRes = context.scene.shadows.resolution;
     const shadowLayers = context.scene.shadows.maxLights ?? 1;
-    this.globalResources.resizeShadows(shadowRes, shadowLayers, device);
+    const pointShadowRes = context.scene.shadows.pointShadowResolution;
+    this.globalResources.resizeShadows(shadowRes, shadowLayers, device, pointShadowRes);
     this.globalResources.environmentMap = context.scene.environmentMap;
     this.globalResources.sceneUniforms.update(context.camera, context.scene);
     const meshes = [];
@@ -39549,7 +39569,20 @@ class Engine {
       this.renderGraph.addPass(atmospherePass);
     }
     this.renderGraph.addPass(cullingPass);
-    const shadowsEnabled = this.config.shadowsEnabled ?? true;
+    let shadowsEnabled = true;
+    let shadowResolution = 2048;
+    let pointShadowResolution = 1024;
+    if (this.config.shadows !== undefined) {
+      if (typeof this.config.shadows === "boolean") {
+        shadowsEnabled = this.config.shadows;
+      } else {
+        shadowsEnabled = this.config.shadows.enabled ?? true;
+        shadowResolution = this.config.shadows.resolution ?? 2048;
+        pointShadowResolution = this.config.shadows.pointShadowResolution ?? 1024;
+      }
+    } else if (this.config.shadowsEnabled !== undefined) {
+      shadowsEnabled = this.config.shadowsEnabled;
+    }
     if (shadowsEnabled) {
       this.renderGraph.addPass(shadowPass);
       this.renderGraph.addPass(pointShadowPass);
@@ -39573,7 +39606,9 @@ class Engine {
     this.renderGraph.addPass(bloomPass);
     this.renderGraph.addPass(toneMappingPass);
     this.renderGraph.init(this.device, this.context, this.presentationFormat, {
-      shadowsEnabled: this.config.shadowsEnabled ?? true
+      shadowsEnabled,
+      shadowResolution,
+      pointShadowResolution
     });
     this.renderGraph.resize(this.canvas.width, this.canvas.height);
     if (atmospherePass) {
@@ -46873,11 +46908,20 @@ async function main() {
     throw new Error("No canvas found");
   }
   console.log("Creating Engine...");
-  const engine = new Engine(canvas, { disableDebugger: true, shadowsEnabled: false });
+  const engine = new Engine(canvas, {
+    disableDebugger: true,
+    shadows: {
+      enabled: true,
+      resolution: 1024,
+      pointShadowResolution: 512
+    }
+  });
   await engine.init();
   console.log("Engine initialized");
   const scene = new Scene(engine);
   console.log("Scene created");
+  scene.shadows.resolution = 1024;
+  scene.shadows.pointShadowResolution = 512;
   scene.postProcessing.bloom.enabled = false;
   scene.postProcessing.ssao.enabled = false;
   scene.postProcessing.fxaa.enabled = false;
