@@ -382,14 +382,16 @@ jobs:
         id: cache-deps
         with:
           path: third_party
-          key: deps-windows-x64-dawn-v10-${{ hashFiles('scripts/download-deps.mjs') }}
+          key: deps-windows-x64-dawn-v13-${{ hashFiles('scripts/download-deps.mjs') }}
 
-      - name: Download base dependencies
+      - name: Download base dependencies (excluding Skia/Dawn - use library-builder version)
         if: steps.cache-deps.outputs.cache-hit != 'true'
         shell: bash
         run: |
           export PATH="/c/Program Files/7-Zip:$PATH"
-          node scripts/download-deps.mjs
+          # Exclude skia and dawn - we'll use skia-win-static from library-builder instead
+          # which includes both Skia and Dawn with matching /MT static CRT
+          node scripts/download-deps.mjs --exclude skia,dawn
 
       - name: Download V8 (if needed)
         if: matrix.js_engine == 'v8' && steps.cache-deps.outputs.cache-hit != 'true'
@@ -398,12 +400,33 @@ jobs:
           export PATH="/c/Program Files/7-Zip:$PATH"
           node scripts/download-deps.mjs --only v8
 
-      - name: Download static Skia+Dawn for Windows Dawn builds
+      - name: Download Skia with Dawn for Windows builds
         if: steps.cache-deps.outputs.cache-hit != 'true'
         shell: bash
         run: |
           export PATH="/c/Program Files/7-Zip:$PATH"
-          node scripts/download-deps.mjs --only skia-win-static --force
+          # Download Skia + Dawn from library-builder (includes dawn_combined.lib with D3D11/D3D12)
+          # This build uses /MT static CRT and has full WebGPU implementation
+          node scripts/download-deps.mjs --only skia-win-static
+
+      - name: Create WebGPU wrapper headers
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          # library-builder Skia only has dawn/*.h headers, but code expects webgpu/*.h
+          # Create wrapper headers that include the dawn versions
+          INCLUDE_DIR="third_party/skia/build/include"
+          mkdir -p "$INCLUDE_DIR/webgpu"
+
+          # webgpu/webgpu.h -> dawn/webgpu.h (using printf to avoid heredoc indentation issues)
+          printf '#ifndef INCLUDE_WEBGPU_WEBGPU_H_\n#define INCLUDE_WEBGPU_WEBGPU_H_\n#include "dawn/webgpu.h"\n#endif\n' > "$INCLUDE_DIR/webgpu/webgpu.h"
+
+          # webgpu/webgpu_cpp.h -> dawn/webgpu_cpp.h
+          printf '#ifndef INCLUDE_WEBGPU_WEBGPU_CPP_H_\n#define INCLUDE_WEBGPU_WEBGPU_CPP_H_\n#include "dawn/webgpu_cpp.h"\n#endif\n' > "$INCLUDE_DIR/webgpu/webgpu_cpp.h"
+
+          echo "Created WebGPU wrapper headers in $INCLUDE_DIR/webgpu/"
+          cat "$INCLUDE_DIR/webgpu/webgpu.h"
+          ls -la "$INCLUDE_DIR/webgpu/"
 
       - name: Install vcpkg dependencies
         run: |

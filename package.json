@@ -1,6 +1,6 @@
 {
   "name": "mystralnative",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Native runtime for Mystral Engine - WebGPU-first 3D game engine",
   "license": "MIT",
   "author": "Mystral Engine",
