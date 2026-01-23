@@ -71,6 +71,15 @@ public:
     bool createSurface(void* nativeHandle, int platformType);
 
     /**
+     * Create a surface from a native window handle with display pointer (for X11/Wayland)
+     * @param display X11 Display* or Wayland display
+     * @param window X11 Window or Wayland surface
+     * @param platformType PLATFORM_XLIB or PLATFORM_WAYLAND
+     * @return true on success
+     */
+    bool createSurfaceWithDisplay(void* display, void* window, int platformType);
+
+    /**
      * Configure the surface for rendering
      * @param width Window width
      * @param height Window height

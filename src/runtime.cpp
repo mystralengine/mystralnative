@@ -304,8 +304,9 @@ public:
                 SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0));
             if (xwindow) {
                 std::cout << "[Mystral] Using X11 display: " << xdisplay << " window: " << xwindow << std::endl;
-                // For X11, we pass the window handle and the display is retrieved via wgpu
-                if (!webgpu_->createSurface(reinterpret_cast<void*>(xwindow), webgpu::Context::PLATFORM_XLIB)) {
+                // Pass both display and window pointer for proper X11 surface creation
+                // Dawn requires the display pointer, wgpu-native can work with just window
+                if (!webgpu_->createSurfaceWithDisplay(xdisplay, reinterpret_cast<void*>(xwindow), webgpu::Context::PLATFORM_XLIB)) {
                     std::cerr << "[Mystral] Failed to create WebGPU surface" << std::endl;
                     return false;
                 }

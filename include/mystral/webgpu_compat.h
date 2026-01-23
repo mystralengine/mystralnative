@@ -39,6 +39,9 @@ typedef WGPUSurfaceDescriptorFromXlibWindow WGPUSurfaceDescriptorFromXlibWindow_
 typedef WGPUSurfaceDescriptorFromAndroidNativeWindow WGPUSurfaceDescriptorFromAndroidNativeWindow_Compat;
 #define WGPUSType_SurfaceDescriptorFromAndroidNativeWindow_Compat WGPUSType_SurfaceDescriptorFromAndroidNativeWindow
 
+// Dawn proc initialization - not needed for wgpu-native
+#define WGPU_NEEDS_PROC_INIT 0
+
 // Texture copy types
 typedef WGPUImageCopyTexture WGPUImageCopyTexture_Compat;
 typedef WGPUImageCopyBuffer WGPUImageCopyBuffer_Compat;
@@ -115,6 +118,13 @@ typedef WGPUSurfaceSourceWindowsHWND WGPUSurfaceDescriptorFromWindowsHWND_Compat
 // Surface descriptors - Linux X11
 typedef WGPUSurfaceSourceXlibWindow WGPUSurfaceDescriptorFromXlibWindow_Compat;
 #define WGPUSType_SurfaceDescriptorFromXlibWindow_Compat WGPUSType_SurfaceSourceXlibWindow
+
+// Surface descriptors - Android ANativeWindow
+typedef WGPUSurfaceSourceAndroidNativeWindow WGPUSurfaceDescriptorFromAndroidNativeWindow_Compat;
+#define WGPUSType_SurfaceDescriptorFromAndroidNativeWindow_Compat WGPUSType_SurfaceSourceAndroidNativeWindow
+
+// Dawn proc initialization - Dawn requires setting up procs before use
+#define WGPU_NEEDS_PROC_INIT 1
 
 // Texture copy types (Dawn renamed Image* to Texel*)
 typedef WGPUTexelCopyTextureInfo WGPUImageCopyTexture_Compat;

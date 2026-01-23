@@ -24,6 +24,16 @@ extern "C" int stbi_write_png(const char* filename, int w, int h, int comp, cons
 #include "mystral/webgpu_compat.h"
 #endif
 
+// Dawn-specific includes for proc table setup
+// Windows uses Skia's dawn_combined.lib which requires proc table initialization
+// Linux/macOS use official Dawn releases which have direct implementations
+#if defined(MYSTRAL_WEBGPU_DAWN)
+#include "dawn/native/DawnNative.h"
+#if defined(_WIN32)
+#include "dawn/dawn_proc.h"
+#endif
+#endif
+
 // wgpu-native specific declarations (avoiding wgpu.h include path issues)
 #if defined(MYSTRAL_WEBGPU_WGPU)
 extern "C" {
@@ -222,6 +232,14 @@ Context::~Context() {
 
 bool Context::initialize() {
     std::cout << "[WebGPU] Initializing..." << std::endl;
+
+#if defined(MYSTRAL_WEBGPU_DAWN) && defined(_WIN32)
+    // Windows Dawn (from Skia build) requires setting up the proc table before any WebGPU calls
+    // This connects the wgpu* function calls to Dawn's actual implementation
+    // Linux/macOS Dawn releases have direct implementations and don't need this
+    dawnProcSetProcs(&dawn::native::GetProcs());
+    std::cout << "[WebGPU] Dawn proc table initialized" << std::endl;
+#endif
 
 #if defined(MYSTRAL_WEBGPU_WGPU)
     // Set up wgpu-native logging
@@ -691,6 +709,178 @@ bool Context::createSurface(void* nativeHandle, int platformType) {
     device_ = deviceData.device;
 
     // Get queue
+    queue_ = wgpuDeviceGetQueue(device_);
+    if (!queue_) {
+        std::cerr << "[WebGPU] Failed to get queue" << std::endl;
+        return false;
+    }
+    std::cout << "[WebGPU] Queue acquired" << std::endl;
+
+    return true;
+}
+
+bool Context::createSurfaceWithDisplay(void* display, void* window, int platformType) {
+    if (!instance_) {
+        std::cerr << "[WebGPU] Cannot create surface: no instance" << std::endl;
+        return false;
+    }
+
+    std::cout << "[WebGPU] Creating surface for platform type " << platformType << " with display pointer" << std::endl;
+
+    WGPUSurfaceDescriptor surfaceDesc = {};
+
+#if defined(__linux__) && !defined(__ANDROID__)
+    WGPUSurfaceDescriptorFromXlibWindow_Compat xlibDesc = {};
+
+    if (platformType == PLATFORM_XLIB) {
+        xlibDesc.chain.sType = WGPUSType_SurfaceDescriptorFromXlibWindow_Compat;
+        xlibDesc.display = display;  // Pass the actual X11 Display pointer
+        xlibDesc.window = reinterpret_cast<uint64_t>(window);
+        surfaceDesc.nextInChain = (WGPUChainedStruct*)&xlibDesc;
+        std::cout << "[WebGPU] Creating X11 surface with display: " << display << " window: " << window << std::endl;
+    } else {
+        std::cerr << "[WebGPU] createSurfaceWithDisplay only supports PLATFORM_XLIB on Linux" << std::endl;
+        return false;
+    }
+#else
+    (void)display;
+    (void)window;
+    (void)platformType;
+    std::cerr << "[WebGPU] createSurfaceWithDisplay is only available on Linux" << std::endl;
+    return false;
+#endif
+
+    surface_ = wgpuInstanceCreateSurface(instance_, &surfaceDesc);
+    if (!surface_) {
+        std::cerr << "[WebGPU] Failed to create surface" << std::endl;
+        return false;
+    }
+    std::cout << "[WebGPU] Surface created" << std::endl;
+
+    // Now request adapter with surface compatibility
+    WGPURequestAdapterOptions adapterOptions = {};
+    adapterOptions.compatibleSurface = surface_;
+    adapterOptions.powerPreference = WGPUPowerPreference_HighPerformance;
+
+    AdapterRequestData adapterData;
+
+#if WGPU_USES_CALLBACK_INFO_PATTERN
+    WGPURequestAdapterCallbackInfo callbackInfo = {};
+    callbackInfo.mode = WGPUCallbackMode_AllowProcessEvents;
+    callbackInfo.callback = onAdapterRequestEnded;
+    callbackInfo.userdata1 = &adapterData;
+    callbackInfo.userdata2 = nullptr;
+    wgpuInstanceRequestAdapter(instance_, &adapterOptions, callbackInfo);
+#else
+    wgpuInstanceRequestAdapter(instance_, &adapterOptions, onAdapterRequestEnded, &adapterData);
+#endif
+
+#if defined(MYSTRAL_WEBGPU_WGPU) || defined(MYSTRAL_WEBGPU_DAWN)
+    while (!adapterData.completed) {
+        wgpuInstanceProcessEvents(instance_);
+    }
+#endif
+
+    if (!adapterData.adapter) {
+        std::cerr << "[WebGPU] Failed to get adapter" << std::endl;
+        return false;
+    }
+    adapter_ = adapterData.adapter;
+
+    // Print adapter info
+    WGPUAdapterInfo adapterInfo = {};
+    wgpuAdapterGetInfo(adapter_, &adapterInfo);
+    std::cout << "[WebGPU] Adapter: " << WGPU_PRINT_STRING_VIEW(adapterInfo.device) << std::endl;
+    std::cout << "[WebGPU] Vendor: " << WGPU_PRINT_STRING_VIEW(adapterInfo.vendor) << std::endl;
+    std::cout << "[WebGPU] Backend: ";
+    switch (adapterInfo.backendType) {
+        case WGPUBackendType_Null: std::cout << "Null"; break;
+        case WGPUBackendType_WebGPU: std::cout << "WebGPU"; break;
+        case WGPUBackendType_D3D11: std::cout << "D3D11"; break;
+        case WGPUBackendType_D3D12: std::cout << "D3D12"; break;
+        case WGPUBackendType_Metal: std::cout << "Metal"; break;
+        case WGPUBackendType_Vulkan: std::cout << "Vulkan"; break;
+        case WGPUBackendType_OpenGL: std::cout << "OpenGL"; break;
+        case WGPUBackendType_OpenGLES: std::cout << "OpenGLES"; break;
+        default: std::cout << "Unknown"; break;
+    }
+    std::cout << std::endl;
+    wgpuAdapterInfoFreeMembers(adapterInfo);
+
+    // Request device with required limits - same as createSurface
+    WGPUDeviceDescriptor deviceDesc = {};
+    WGPU_SET_LABEL(deviceDesc, "Mystral Device");
+
+#if defined(MYSTRAL_WEBGPU_DAWN)
+    WGPULimits adapterLimits = {};
+    wgpuAdapterGetLimits(adapter_, &adapterLimits);
+    WGPULimits requiredLimits = adapterLimits;
+    uint32_t neededBytesPerSample = 64;
+    if (adapterLimits.maxColorAttachmentBytesPerSample >= neededBytesPerSample) {
+        requiredLimits.maxColorAttachmentBytesPerSample = neededBytesPerSample;
+    }
+    deviceDesc.requiredLimits = &requiredLimits;
+
+    static WGPUFeatureName requiredFeaturesDawn[1];
+    size_t featureCount = 0;
+    if (wgpuAdapterHasFeature(adapter_, WGPUFeatureName_IndirectFirstInstance)) {
+        requiredFeaturesDawn[0] = WGPUFeatureName_IndirectFirstInstance;
+        featureCount = 1;
+        hasIndirectFirstInstance_ = true;
+    }
+    deviceDesc.requiredFeatureCount = featureCount;
+    deviceDesc.requiredFeatures = featureCount > 0 ? requiredFeaturesDawn : nullptr;
+#elif defined(MYSTRAL_WEBGPU_WGPU)
+    WGPUSupportedLimits adapterLimits = {};
+    wgpuAdapterGetLimits(adapter_, &adapterLimits);
+    WGPURequiredLimits requiredLimits = {};
+    requiredLimits.limits = adapterLimits.limits;
+    uint32_t neededBytesPerSample = 64;
+    if (adapterLimits.limits.maxColorAttachmentBytesPerSample >= neededBytesPerSample) {
+        requiredLimits.limits.maxColorAttachmentBytesPerSample = neededBytesPerSample;
+    }
+    deviceDesc.requiredLimits = &requiredLimits;
+
+    static WGPUFeatureName requiredFeaturesWGPU[1];
+    size_t featureCount = 0;
+    if (wgpuAdapterHasFeature(adapter_, WGPUFeatureName_IndirectFirstInstance)) {
+        requiredFeaturesWGPU[0] = WGPUFeatureName_IndirectFirstInstance;
+        featureCount = 1;
+        hasIndirectFirstInstance_ = true;
+    }
+    deviceDesc.requiredFeatureCount = featureCount;
+    deviceDesc.requiredFeatures = featureCount > 0 ? requiredFeaturesWGPU : nullptr;
+#endif
+
+    WGPUUncapturedErrorCallbackInfo errorCallbackInfo = {};
+    errorCallbackInfo.callback = onDeviceError;
+    deviceDesc.uncapturedErrorCallbackInfo = errorCallbackInfo;
+
+    DeviceRequestData deviceData;
+
+#if WGPU_USES_CALLBACK_INFO_PATTERN
+    WGPURequestDeviceCallbackInfo deviceCallbackInfo = {};
+    deviceCallbackInfo.mode = WGPUCallbackMode_AllowProcessEvents;
+    deviceCallbackInfo.callback = onDeviceRequestEnded;
+    deviceCallbackInfo.userdata1 = &deviceData;
+    deviceCallbackInfo.userdata2 = nullptr;
+    wgpuAdapterRequestDevice(adapter_, &deviceDesc, deviceCallbackInfo);
+#else
+    wgpuAdapterRequestDevice(adapter_, &deviceDesc, onDeviceRequestEnded, &deviceData);
+#endif
+
+#if defined(MYSTRAL_WEBGPU_WGPU) || defined(MYSTRAL_WEBGPU_DAWN)
+    while (!deviceData.completed) {
+        wgpuInstanceProcessEvents(instance_);
+    }
+#endif
+
+    if (!deviceData.device) {
+        std::cerr << "[WebGPU] Failed to get device" << std::endl;
+        return false;
+    }
+    device_ = deviceData.device;
+
     queue_ = wgpuDeviceGetQueue(device_);
     if (!queue_) {
         std::cerr << "[WebGPU] Failed to get queue" << std::endl;
