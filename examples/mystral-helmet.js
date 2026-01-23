@@ -7999,7 +7999,9 @@ class GlobalResources {
       this._bindGroupsDirty = false;
     }
   }
-  constructor(device) {
+  _shadowsInitialized = false;
+  constructor(device, options) {
+    const shadowsEnabled = options?.shadowsEnabled ?? true;
     this.sceneUniforms = new SceneUniforms(device);
     this.objectBuffer = new ObjectBuffer(device);
     this.hiZBuffer = new HiZBuffer(device, 1, 1);
@@ -8019,14 +8021,39 @@ class GlobalResources {
       size: 64,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
     });
-    const initialShadowLayers = Math.max(CASCADE_COUNT, activeShadowLayers);
-    console.log(`GlobalResources: Creating initial shadow atlas 2048x2048x${initialShadowLayers} (${(2048 * 2048 * initialShadowLayers * 4 / 1024 / 1024).toFixed(1)} MB)`);
-    this.shadowAtlas = device.createTexture({
-      label: "Shadow Atlas (Array)",
-      size: [2048, 2048, initialShadowLayers],
-      format: "depth32float",
-      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
-    });
+    if (shadowsEnabled) {
+      const initialShadowLayers = Math.max(CASCADE_COUNT, activeShadowLayers);
+      console.log(`GlobalResources: Creating shadow atlas 2048x2048x${initialShadowLayers} (${(2048 * 2048 * initialShadowLayers * 4 / 1024 / 1024).toFixed(1)} MB)`);
+      this.shadowAtlas = device.createTexture({
+        label: "Shadow Atlas (Array)",
+        size: [2048, 2048, initialShadowLayers],
+        format: "depth32float",
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
+      });
+      console.log(`GlobalResources: Creating point shadow atlas 1024x1024x${MAX_SHADOW_LIGHTS * 6} (${(1024 * 1024 * MAX_SHADOW_LIGHTS * 6 * 4 / 1024 / 1024).toFixed(1)} MB)`);
+      this.pointShadowAtlas = device.createTexture({
+        label: "Point Shadow Atlas (Cube Array)",
+        size: [1024, 1024, MAX_SHADOW_LIGHTS * 6],
+        format: "r32float",
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
+      });
+      this._shadowsInitialized = true;
+    } else {
+      console.log("GlobalResources: Shadows disabled - creating 1x1 placeholder textures");
+      this.shadowAtlas = device.createTexture({
+        label: "Shadow Atlas Placeholder",
+        size: [1, 1, 1],
+        format: "depth32float",
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
+      });
+      this.pointShadowAtlas = device.createTexture({
+        label: "Point Shadow Atlas Placeholder",
+        size: [1, 1, 1],
+        format: "r32float",
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
+      });
+      this._shadowsInitialized = false;
+    }
     this.shadowSampler = device.createSampler({
       compare: "less",
       magFilter: "linear",
@@ -8042,24 +8069,23 @@ class GlobalResources {
       size: CASCADE_UNIFORMS_SIZE,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
     });
-    console.log(`GlobalResources: Creating point shadow atlas 1024x1024x${MAX_SHADOW_LIGHTS * 6} (${(1024 * 1024 * MAX_SHADOW_LIGHTS * 6 * 4 / 1024 / 1024).toFixed(1)} MB)`);
-    this.pointShadowAtlas = device.createTexture({
-      label: "Point Shadow Atlas (Cube Array)",
-      size: [1024, 1024, MAX_SHADOW_LIGHTS * 6],
-      format: "r32float",
-      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
-    });
     this.pointShadowSampler = device.createSampler({
       label: "Point Shadow Sampler",
       magFilter: "nearest",
       minFilter: "nearest"
     });
   }
+  get shadowsInitialized() {
+    return this._shadowsInitialized;
+  }
   resize(width, height) {
     this.hiZBuffer.resize(width, height);
     this._bindGroupsDirty = true;
   }
   resizeShadows(resolution, maxLights, device) {
+    if (!this._shadowsInitialized) {
+      return;
+    }
     const spotLightLayers = Math.max(0, Math.min(MAX_SHADOW_LIGHTS, maxLights));
     const layers = CASCADE_COUNT + spotLightLayers;
     if (this.shadowAtlas && this.shadowAtlas.width === resolution && this.shadowAtlas.depthOrArrayLayers === layers) {
@@ -9922,8 +9948,8 @@ class RenderGraph {
     }
     return false;
   }
-  init(device, context, presentationFormat) {
-    this.globalResources = new GlobalResources(device);
+  init(device, context, presentationFormat, options) {
+    this.globalResources = new GlobalResources(device, options);
     this.globalResources.createBindGroup(device);
     for (const pass of this.passes) {
       pass.init(device, context, presentationFormat);
@@ -39523,8 +39549,11 @@ class Engine {
       this.renderGraph.addPass(atmospherePass);
     }
     this.renderGraph.addPass(cullingPass);
-    this.renderGraph.addPass(shadowPass);
-    this.renderGraph.addPass(pointShadowPass);
+    const shadowsEnabled = this.config.shadowsEnabled ?? true;
+    if (shadowsEnabled) {
+      this.renderGraph.addPass(shadowPass);
+      this.renderGraph.addPass(pointShadowPass);
+    }
     this.renderGraph.addPass(geometryPass);
     this.renderGraph.addPass(hiZPass);
     const velocityFromDepthPass = new VelocityFromDepthPass(gBuffer);
@@ -39543,7 +39572,9 @@ class Engine {
     this.renderGraph.addPass(lensEffectsPass);
     this.renderGraph.addPass(bloomPass);
     this.renderGraph.addPass(toneMappingPass);
-    this.renderGraph.init(this.device, this.context, this.presentationFormat);
+    this.renderGraph.init(this.device, this.context, this.presentationFormat, {
+      shadowsEnabled: this.config.shadowsEnabled ?? true
+    });
     this.renderGraph.resize(this.canvas.width, this.canvas.height);
     if (atmospherePass) {
       const globalRes = this.renderGraph.getGlobalResources();
@@ -46842,7 +46873,7 @@ async function main() {
     throw new Error("No canvas found");
   }
   console.log("Creating Engine...");
-  const engine = new Engine(canvas, { disableDebugger: true });
+  const engine = new Engine(canvas, { disableDebugger: true, shadowsEnabled: false });
   await engine.init();
   console.log("Engine initialized");
   const scene = new Scene(engine);
