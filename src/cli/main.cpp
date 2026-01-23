@@ -40,7 +40,7 @@
 
 void printVersion() {
     std::cout << "Mystral Native Runtime v" << mystral::getVersion() << std::endl;
-    std::cout << "Native WebGPU JS runtime - " << mystral::getWebGPUBackend() << " + " << mystral::getJSEngine() << " build" << std::endl;
+    std::cout << "WebGPU + QuickJS Game Engine Runtime" << std::endl;
 }
 
 void printHelp() {
@@ -60,7 +60,6 @@ RUN OPTIONS:
     --title <str>         Window title (default: "Mystral")
     --headless            Run with hidden window (background mode)
     --no-sdl              Run without SDL (headless GPU, no window system required)
-    --watch, -w           Watch mode: reload script on file changes
     --screenshot <file>   Take screenshot after N frames and quit
     --frames <n>          Number of frames before screenshot (default: 60)
     --quiet, -q           Suppress all output except errors
@@ -128,7 +127,6 @@ struct CLIOptions {
     bool showHelp = false;
     bool showVersion = false;
     bool headless = false;
-    bool watch = false;  // Watch mode for hot reloading
 
     // Screenshot mode
     std::string screenshotPath;
@@ -176,8 +174,6 @@ CLIOptions parseArgs(int argc, char* argv[]) {
             opts.headless = true;
         } else if (arg == "--no-sdl") {
             opts.noSdl = true;
-        } else if (arg == "--watch" || arg == "-w") {
-            opts.watch = true;
         } else if ((arg == "run") && opts.command.empty()) {
             opts.command = "run";
         } else if ((arg == "compile" || arg == "--compile") && opts.command.empty()) {
@@ -640,9 +636,6 @@ int runScript(const CLIOptions& opts) {
         if (screenshotMode) {
             std::cout << "Screenshot mode: " << opts.frames << " frames -> " << opts.screenshotPath << std::endl;
         }
-        if (opts.watch) {
-            std::cout << "Watch mode: enabled (hot reload on file changes)" << std::endl;
-        }
         std::cout << std::endl;
     }
 
@@ -652,7 +645,6 @@ int runScript(const CLIOptions& opts) {
     config.height = opts.height;
     config.title = opts.title.c_str();
     config.noSdl = opts.noSdl;
-    config.watch = opts.watch;
 
     auto runtime = mystral::Runtime::create(config);
     if (!runtime) {

@@ -17,7 +17,6 @@ struct RuntimeConfig {
     bool vsync = true;
     bool resizable = true;
     bool noSdl = false;  // Run without SDL (headless GPU mode, no window)
-    bool watch = false;  // Watch mode: reload script on file changes
 };
 
 /**
@@ -60,13 +59,6 @@ public:
      * @return true on success
      */
     virtual bool evalScript(const std::string& code, const std::string& filename = "<eval>") = 0;
-
-    /**
-     * Reload the currently loaded script (for hot reload)
-     * Clears timers and requestAnimationFrame callbacks, then re-evaluates the script.
-     * @return true on success
-     */
-    virtual bool reloadScript() = 0;
 
     // ========================================================================
     // Main Loop
@@ -150,30 +142,13 @@ protected:
     Runtime() = default;
 };
 
-// Version info - uses CMake-defined MYSTRAL_VERSION
-#ifndef MYSTRAL_VERSION
-#define MYSTRAL_VERSION "0.0.2"
-#endif
+// Version info
+constexpr int VERSION_MAJOR = 0;
+constexpr int VERSION_MINOR = 1;
+constexpr int VERSION_PATCH = 0;
 
 inline const char* getVersion() {
-    return MYSTRAL_VERSION;
-}
-
-// Build configuration - uses CMake-defined values
-#ifndef MYSTRAL_JS_ENGINE
-#define MYSTRAL_JS_ENGINE "quickjs"
-#endif
-
-#ifndef MYSTRAL_WEBGPU_BACKEND
-#define MYSTRAL_WEBGPU_BACKEND "wgpu-native"
-#endif
-
-inline const char* getJSEngine() {
-    return MYSTRAL_JS_ENGINE;
-}
-
-inline const char* getWebGPUBackend() {
-    return MYSTRAL_WEBGPU_BACKEND;
+    return "0.1.0";
 }
 
 }  // namespace mystral

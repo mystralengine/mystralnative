@@ -247,48 +247,20 @@ const DEPS = {
     },
     extractTo: 'swc',
   },
-  libuv: {
-    // libuv - async I/O library (used by Node.js)
-    // For non-blocking HTTP, file I/O, and timers
-    // https://github.com/mystralengine/library-builder/releases
-    version: 'libuv-1.51.0-5',
-    getUrl: () => {
-      const baseUrl = 'https://github.com/mystralengine/library-builder/releases/download/libuv-1.51.0-5';
-      if (platformName === 'macos') {
-        const arch = ARCH === 'arm64' ? 'arm64' : 'x86_64';
-        return `${baseUrl}/libuv-mac-${arch}.zip`;
-      } else if (platformName === 'linux') {
-        if (ARCH !== 'x64') {
-          console.warn(`libuv prebuilts not available for ${platformName}-${archName}`);
-          return null;
-        }
-        return `${baseUrl}/libuv-linux-x64.zip`;
-      } else if (platformName === 'windows') {
-        if (ARCH !== 'x64') {
-          console.warn(`libuv prebuilts not available for ${platformName}-${archName}`);
-          return null;
-        }
-        return `${baseUrl}/libuv-win-x64.zip`;
-      }
-      console.warn(`libuv prebuilts not available for ${platformName}-${archName}`);
-      return null;
-    },
-    extractTo: 'libuv',
-  },
   'skia-win-static': {
     // Static Skia + Dawn for Windows from mystralengine/library-builder
-    // This build uses /MT (static CRT) and includes dawn_combined.lib with
-    // full D3D11/D3D12 WebGPU implementation (not just proc stubs)
+    // This build uses /MT (static CRT) and includes dawn_combined.lib
     // Use this for Windows Dawn builds to avoid CRT mismatch with Skia
     // https://github.com/mystralengine/library-builder/releases
-    version: 'skia-win-dawn-v1',
+    version: 'skia-win-static-1',
     getUrl: () => {
       if (platformName !== 'windows') {
         console.warn('skia-win-static is only for Windows');
         return null;
       }
-      // Download from library-builder - includes Skia + Dawn with D3D11/D3D12 backends
-      return 'https://github.com/mystralengine/library-builder/releases/download/skia-win-dawn-v1/skia-build-win-x64-static-gpu-release.zip';
+      // Download from library-builder GitHub Actions artifacts
+      // This contains both skia.lib and dawn_combined.lib with /MT
+      return 'https://github.com/mystralengine/library-builder/releases/download/skia-win-static-1/skia-build-win-x64-static-gpu-release.zip';
     },
     extractTo: 'skia',  // Extract to same place as regular skia
   },
@@ -658,7 +630,7 @@ async function main() {
   const onlyIndex = args.indexOf('--only');
 
   // Desktop deps (downloaded by default)
-  const desktopDeps = ['wgpu', 'sdl3', 'dawn', 'v8', 'quickjs', 'stb', 'cgltf', 'webp', 'skia', 'swc', 'libuv'];
+  const desktopDeps = ['wgpu', 'sdl3', 'dawn', 'v8', 'quickjs', 'stb', 'cgltf', 'webp', 'skia', 'swc'];
 
   // iOS deps (only downloaded with --only or --ios)
   const iosDeps = ['wgpu-ios', 'skia-ios'];

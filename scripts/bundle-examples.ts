@@ -20,8 +20,9 @@ const OUTPUT_DIR = join(import.meta.dir, "../examples");
 // List of example files to bundle (source -> output name)
 const EXAMPLES: Array<{ source: string; output: string }> = [
   { source: "main.ts", output: "mystral-helmet.js" },
-  { source: "daynight-demo.ts", output: "daynight.js" },
-  { source: "sponza-native.ts", output: "sponza.js" },
+  // Add more examples here as needed:
+  // { source: "basic-scene.ts", output: "mystral-basic-scene.js" },
+  // { source: "sponza.ts", output: "mystral-sponza.js" },
 ];
 
 async function bundleExample(example: { source: string; output: string }): Promise<boolean> {

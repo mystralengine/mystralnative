@@ -1,9 +1,20 @@
 cmake_minimum_required(VERSION 3.20)
-project(MystralNativeRuntime VERSION 0.0.2 LANGUAGES C CXX)
+project(MystralNativeRuntime VERSION 0.1.0 LANGUAGES C CXX)
 
-# Windows: Use /MT (static CRT) for all builds
-# Both Skia and Dawn (from library-builder) are built with /MT static CRT.
-# The CI workflow passes -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded for all Windows builds.
+# V8 requires C++20, so use that if V8 is enabled, otherwise C++17
+if(MYSTRAL_USE_V8)
+    set(CMAKE_CXX_STANDARD 20)
+else()
+    set(CMAKE_CXX_STANDARD 17)
+endif()
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+# Windows: CRT selection depends on WebGPU backend
+# - wgpu builds: Use /MT (static CRT) to match Skia prebuilt
+# - Dawn builds: Use /MD (dynamic CRT) to match Dawn prebuilt
+# The CI workflow passes -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded for wgpu builds
+# For Dawn builds, we use the default /MD which matches the prebuilt Dawn library
 
 # ============================================================================
 # Options
@@ -14,23 +25,6 @@ option(MYSTRAL_USE_V8 "Use V8 JavaScript engine" OFF)
 option(MYSTRAL_USE_JSC "Use JavaScriptCore engine" OFF)
 option(MYSTRAL_USE_QUICKJS "Use QuickJS engine" ON)  # Default - simplest to start
 option(MYSTRAL_USE_SWC "Enable SWC TypeScript transpiler" ON)
-
-# V8 requires C++20, so use that if V8 is enabled, otherwise C++17
-# Must be after option() definitions so MYSTRAL_USE_V8 is properly set
-if(MYSTRAL_USE_V8)
-    set(CMAKE_CXX_STANDARD 20)
-    message(STATUS "V8 enabled - using C++20")
-    # MSVC needs explicit flag for C++20 in CMAKE_CXX_FLAGS
-    # (add_compile_options can be overridden by vcpkg toolchain)
-    if(MSVC)
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /std:c++20")
-    endif()
-else()
-    set(CMAKE_CXX_STANDARD 17)
-    message(STATUS "V8 disabled - using C++17")
-endif()
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # WebGPU Implementation (choose one)
 option(MYSTRAL_USE_DAWN "Use Dawn WebGPU implementation" OFF)
@@ -240,53 +234,32 @@ if(MYSTRAL_USE_WGPU)
     endif()
 endif()
 
-# Dawn WebGPU Implementation
-# Windows: Uses dawn_combined.lib from Skia build (library-builder), built with /MT static CRT
-#          and full D3D11/D3D12 WebGPU implementation (not just proc stubs)
-# Other platforms: Uses official Dawn releases from https://github.com/google/dawn/releases
+# Dawn
+# On Windows: Use dawn_combined.lib from library-builder static Skia build (skia-win-static)
+#             This is built with /MT (static CRT) to match Skia
+# On other platforms: Use official Dawn releases from https://github.com/google/dawn/releases
 if(MYSTRAL_USE_DAWN)
     set(DAWN_FOUND OFF)
 
+    # Windows: First check for dawn_combined.lib in Skia directory (from library-builder)
+    # This is the static build with /MT that matches Skia
     if(WIN32)
-        # Windows: Look for dawn_combined.lib in the Skia build directory
-        # The skia-win-static dependency from library-builder includes Dawn with full
-        # D3D11/D3D12 backends, built with /MT static CRT to match Skia
-
-        # Set up Skia paths early since Dawn depends on them
-        # (normally defined later in the CMakeLists, but needed here for Dawn detection)
-        set(SKIA_DIR ${THIRD_PARTY_DIR}/skia)
-        set(SKIA_TARGET_DIR ${SKIA_DIR})
-        set(SKIA_PLATFORM_DIR "win-gpu")
-        set(SKIA_LIB_SUBDIR "x64")
-
-        if(EXISTS ${SKIA_TARGET_DIR})
-            # dawn_combined.lib is in the same directory as skia.lib
-            set(DAWN_LIB_PATH ${SKIA_TARGET_DIR}/build/${SKIA_PLATFORM_DIR}/lib/Release/${SKIA_LIB_SUBDIR}/dawn_combined.lib)
-            message(STATUS "Looking for Dawn combined library at: ${DAWN_LIB_PATH}")
-
-            if(EXISTS ${DAWN_LIB_PATH})
-                set(DAWN_LIBRARY ${DAWN_LIB_PATH})
-                # Dawn headers in Skia build are split across two locations:
-                # 1. build/include/third_party/externals/dawn/include/webgpu/webgpu.h (wrapper)
-                # 2. build/include/dawn/webgpu.h (actual definitions)
-                # The wrapper includes "dawn/webgpu.h", so we need both paths
-                set(DAWN_INCLUDE_DIR
-                    ${SKIA_TARGET_DIR}/build/include/third_party/externals/dawn/include
-                    ${SKIA_TARGET_DIR}/build/include
-                )
-                set(DAWN_FOUND ON)
-                message(STATUS "Found Dawn combined library from Skia build")
-                message(STATUS "Dawn includes: ${DAWN_INCLUDE_DIR}")
-            else()
-                message(WARNING "dawn_combined.lib not found in Skia build at ${DAWN_LIB_PATH}")
-                message(WARNING "Run 'node scripts/download-deps.mjs --only skia-win-static' first.")
-            endif()
-        else()
-            message(WARNING "Skia directory not found. Dawn on Windows requires Skia build.")
-            message(WARNING "Run 'node scripts/download-deps.mjs --only skia-win-static' first.")
+        set(SKIA_DAWN_LIB ${THIRD_PARTY_DIR}/skia/build/win-gpu/lib/Release/x64/dawn_combined.lib)
+        set(SKIA_DAWN_INCLUDE ${THIRD_PARTY_DIR}/skia/build/include/dawn)
+        # The webgpu/webgpu.h headers are at third_party/externals/dawn/include/
+        set(SKIA_DAWN_WEBGPU_INCLUDE ${THIRD_PARTY_DIR}/skia/build/include/third_party/externals/dawn/include)
+        if(EXISTS ${SKIA_DAWN_LIB} AND EXISTS ${SKIA_DAWN_INCLUDE})
+            set(DAWN_LIBRARY ${SKIA_DAWN_LIB})
+            # Use the path where webgpu/webgpu.h lives
+            set(DAWN_INCLUDE_DIR ${SKIA_DAWN_WEBGPU_INCLUDE})
+            set(DAWN_FOUND ON)
+            message(STATUS "Found Dawn (static, from Skia build): ${DAWN_LIBRARY}")
+            message(STATUS "Dawn headers: ${DAWN_INCLUDE_DIR}")
         endif()
-    else()
-        # Non-Windows: Use official Dawn releases
+    endif()
+
+    # Fallback: Official Dawn releases
+    if(NOT DAWN_FOUND)
         set(DAWN_DIR ${THIRD_PARTY_DIR}/dawn)
         if(EXISTS ${DAWN_DIR})
             # Find the platform-specific subdirectory (contains commit hash in name)
@@ -301,10 +274,16 @@ if(MYSTRAL_USE_DAWN)
                 message(STATUS "Dawn lib directory contents: ${DAWN_LIB_FILES}")
                 message(STATUS "Dawn lib64 directory contents: ${DAWN_LIB64_FILES}")
 
-                # Find library - try static first, then shared
-                set(DAWN_LIB_NAMES "libwebgpu_dawn.a" "libdawn.a" "libwebgpu_dawn.so" "libdawn.so")
-                # Linux uses lib64, macOS uses lib
-                set(DAWN_LIB_DIRS "lib64" "lib")
+                # Find library - try multiple names and types
+                if(WIN32)
+                    set(DAWN_LIB_NAMES "webgpu_dawn.lib" "dawn.lib" "libwebgpu_dawn.a")
+                    set(DAWN_LIB_DIRS "lib")
+                else()
+                    # Try static first, then shared
+                    set(DAWN_LIB_NAMES "libwebgpu_dawn.a" "libdawn.a" "libwebgpu_dawn.so" "libdawn.so")
+                    # Linux uses lib64, macOS uses lib
+                    set(DAWN_LIB_DIRS "lib64" "lib")
+                endif()
 
                 foreach(LIB_DIR ${DAWN_LIB_DIRS})
                     foreach(LIB_NAME ${DAWN_LIB_NAMES})
@@ -346,8 +325,8 @@ if(MYSTRAL_USE_DAWN)
     if(DAWN_FOUND)
         add_library(dawn::webgpu STATIC IMPORTED)
         set_target_properties(dawn::webgpu PROPERTIES
-            IMPORTED_LOCATION "${DAWN_LIBRARY}"
-            INTERFACE_INCLUDE_DIRECTORIES "${DAWN_INCLUDE_DIR}"
+            IMPORTED_LOCATION ${DAWN_LIBRARY}
+            INTERFACE_INCLUDE_DIRECTORIES ${DAWN_INCLUDE_DIR}
         )
         # Only define MYSTRAL_WEBGPU_DAWN if wgpu-native wasn't already set up
         # (can't have both WebGPU backends active)
@@ -362,11 +341,8 @@ if(MYSTRAL_USE_DAWN)
         message(STATUS "Dawn includes: ${DAWN_INCLUDE_DIR}")
     else()
         message(WARNING "Dawn library or headers not found")
-        if(WIN32)
-            message(WARNING "  Run 'node scripts/download-deps.mjs --only skia-win-static'")
-        else()
-            message(WARNING "  Run 'node scripts/download-deps.mjs --only dawn'")
-        endif()
+        message(WARNING "  For Windows Dawn: Run 'node scripts/download-deps.mjs --only skia-win-static'")
+        message(WARNING "  For other platforms: Run 'node scripts/download-deps.mjs --only dawn'")
     endif()
 endif()
 
@@ -448,12 +424,8 @@ if(MYSTRAL_USE_V8)
         endif()
 
         # Find headers
-        # kuoruan/libv8 puts headers in include/ on Linux/macOS, but at root on Windows
         if(EXISTS ${V8_DIR}/include)
             set(V8_INCLUDE_DIR ${V8_DIR}/include)
-        elseif(EXISTS ${V8_DIR}/v8.h)
-            # Windows: headers are at root level
-            set(V8_INCLUDE_DIR ${V8_DIR})
         endif()
 
         if(V8_LIBRARY AND V8_INCLUDE_DIR)
@@ -686,61 +658,6 @@ else()
     endif()
 endif()
 
-# libuv (async I/O library for non-blocking network, file, and timer operations)
-# Prebuilt layout: libuv/include/uv.h, libuv/include/uv/*.h, libuv/libuv.a (or libuv.lib)
-# Note: libuv is only used on desktop platforms; iOS/Android use platform-native async APIs
-set(LIBUV_DIR ${THIRD_PARTY_DIR}/libuv)
-if(EXISTS ${LIBUV_DIR} AND NOT IOS AND NOT ANDROID)
-    # Headers are directly in include/
-    if(EXISTS ${LIBUV_DIR}/include)
-        set(LIBUV_INCLUDE_DIR ${LIBUV_DIR}/include)
-    endif()
-
-    # Library is at root level (from library-builder output)
-    if(WIN32)
-        set(LIBUV_LIB_PATH ${LIBUV_DIR}/libuv.lib)
-    else()
-        set(LIBUV_LIB_PATH ${LIBUV_DIR}/libuv.a)
-    endif()
-
-    if(EXISTS ${LIBUV_LIB_PATH})
-        set(LIBUV_LIBRARY ${LIBUV_LIB_PATH})
-    else()
-        find_library(LIBUV_LIBRARY
-            NAMES uv libuv
-            PATHS ${LIBUV_DIR} ${LIBUV_DIR}/lib
-            NO_DEFAULT_PATH
-        )
-    endif()
-
-    if(LIBUV_LIBRARY AND LIBUV_INCLUDE_DIR)
-        add_library(libuv::libuv STATIC IMPORTED)
-        set_target_properties(libuv::libuv PROPERTIES
-            IMPORTED_LOCATION ${LIBUV_LIBRARY}
-            INTERFACE_INCLUDE_DIRECTORIES ${LIBUV_INCLUDE_DIR}
-        )
-        add_compile_definitions(MYSTRAL_HAS_LIBUV)
-        message(STATUS "Found libuv: ${LIBUV_LIBRARY}")
-        message(STATUS "libuv includes: ${LIBUV_INCLUDE_DIR}")
-
-        # libuv requires additional system libraries on each platform
-        if(WIN32)
-            # Windows: network, system, and debug libraries
-            # dbghelp is required for uv_kill stack trace functionality
-            set(LIBUV_SYSTEM_LIBS iphlpapi psapi userenv ws2_32 dbghelp)
-        elseif(UNIX AND NOT APPLE)
-            # Linux: pthread and dl
-            set(LIBUV_SYSTEM_LIBS pthread dl)
-        endif()
-    else()
-        message(WARNING "libuv library or headers not found:")
-        message(WARNING "  Library: ${LIBUV_LIB_PATH}")
-        message(WARNING "  Include: ${LIBUV_INCLUDE_DIR}")
-    endif()
-else()
-    message(STATUS "libuv not found - async I/O disabled. Run 'node scripts/download-deps.mjs --only libuv' to enable.")
-endif()
-
 # ============================================================================
 # Main Library
 # ============================================================================
@@ -763,14 +680,10 @@ set(MYSTRAL_SOURCES
     src/utils/stb_impl.cpp
     src/utils/cgltf_impl.cpp
     src/http/http_client.cpp
-    src/http/async_http_client.cpp
-    src/fs/async_file.cpp
-    src/fs/file_watcher.cpp
     src/gltf/gltf_loader.cpp
     src/audio/audio_context.cpp
     src/audio/audio_bindings.cpp
     src/vfs/embedded_bundle.cpp
-    src/async/event_loop.cpp
 )
 
 if(ANDROID)
@@ -786,29 +699,6 @@ target_include_directories(mystral-runtime PUBLIC
 target_include_directories(mystral-runtime PRIVATE
     ${THIRD_PARTY_DIR}/stb
     ${THIRD_PARTY_DIR}/cgltf
-)
-
-# Pass build configuration to source code
-# Determine JS engine name
-if(MYSTRAL_USE_V8)
-    set(MYSTRAL_JS_ENGINE_NAME "v8")
-elseif(MYSTRAL_USE_JSC)
-    set(MYSTRAL_JS_ENGINE_NAME "jsc")
-else()
-    set(MYSTRAL_JS_ENGINE_NAME "quickjs")
-endif()
-
-# Determine WebGPU backend name
-if(MYSTRAL_USE_DAWN)
-    set(MYSTRAL_WEBGPU_NAME "dawn")
-else()
-    set(MYSTRAL_WEBGPU_NAME "wgpu-native")
-endif()
-
-target_compile_definitions(mystral-runtime PUBLIC
-    MYSTRAL_VERSION="${PROJECT_VERSION}"
-    MYSTRAL_JS_ENGINE="${MYSTRAL_JS_ENGINE_NAME}"
-    MYSTRAL_WEBGPU_BACKEND="${MYSTRAL_WEBGPU_NAME}"
 )
 
 # Platform-specific sources
@@ -843,14 +733,6 @@ endif()
 
 if(MYSTRAL_USE_V8 AND TARGET v8::v8)
     target_sources(mystral-runtime PRIVATE src/js/v8_engine.cpp)
-    # V8 requires C++20 - force it at target level for MSVC
-    # MSVC needs /Zc:__cplusplus to report the correct __cplusplus value
-    # (V8 checks __cplusplus <= 201703L which fails without this flag)
-    if(MSVC)
-        target_compile_options(mystral-runtime PRIVATE /std:c++20 /Zc:__cplusplus)
-    else()
-        target_compile_features(mystral-runtime PRIVATE cxx_std_20)
-    endif()
     # On macOS with Dawn, V8 is linked specially in the Dawn section with -force_load
     # to handle Abseil symbol conflicts. Skip normal linking here but keep include dirs.
     if(APPLE AND MYSTRAL_USE_DAWN)
@@ -927,11 +809,6 @@ if(MYSTRAL_USE_DAWN AND TARGET dawn::webgpu)
         # OneCoreUap.lib is the umbrella library for Windows 10+ APIs that includes
         # all the necessary API sets. It's always available in the Windows SDK.
         target_link_libraries(mystral-runtime PUBLIC OneCoreUap.lib)
-        # Dawn and V8 both include Abseil library, causing duplicate symbol errors.
-        # Use /FORCE:MULTIPLE to ignore duplicate definitions on MSVC.
-        if(MYSTRAL_USE_V8)
-            target_link_options(mystral-runtime PUBLIC "/FORCE:MULTIPLE")
-        endif()
     elseif(UNIX)
         # Dawn and V8 both include Abseil library, causing multiple definition errors.
         # Allow multiple definitions to resolve this conflict.
@@ -1010,15 +887,6 @@ if(TARGET swc::swc)
     # SWC (Rust) on Windows needs these system libraries
     if(WIN32)
         target_link_libraries(mystral-runtime PUBLIC userenv ntdll)
-    endif()
-endif()
-
-# libuv linkage (async I/O - non-blocking HTTP, file I/O, timers)
-if(TARGET libuv::libuv)
-    target_link_libraries(mystral-runtime PUBLIC libuv::libuv)
-    # libuv requires platform-specific system libraries
-    if(LIBUV_SYSTEM_LIBS)
-        target_link_libraries(mystral-runtime PUBLIC ${LIBUV_SYSTEM_LIBS})
     endif()
 endif()
 

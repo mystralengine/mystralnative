@@ -36,26 +36,15 @@ cd mystralnative
 # Install bun if you don't have it
 curl -fsSL https://bun.sh/install | bash
 
-# Download dependencies
+# Download dependencies and build
 bun install
 bun run deps:download
-
-# Configure with V8 + Dawn (recommended for full shader compatibility)
-cmake -B build \
-  -DMYSTRAL_USE_V8=ON \
-  -DMYSTRAL_USE_DAWN=ON \
-  -DMYSTRAL_USE_QUICKJS=OFF \
-  -DMYSTRAL_USE_WGPU=OFF
-
-# Build
-cmake --build build --parallel
+bun run configure
+bun run build
 
 # Run an example
 ./build/mystral run examples/triangle.js
-./build/mystral run examples/mystral-helmet.js  # Full PBR scene
 ```
-
-**Note:** V8 + Dawn is recommended for development because wgpu-native does not yet support all WGSL shader features used by the Mystral engine.
 
 ## What Can You Build?
 
@@ -98,12 +87,6 @@ window.addEventListener("gamepadconnected", (e) => {
 # Full 3D scene with PBR lighting (Dawn builds only)
 ./mystral run examples/mystral-helmet.js
 
-# Day/night cycle demo with atmosphere
-./mystral run examples/daynight.js
-
-# Sponza palace with day/night, torches, fireflies (Dawn builds only)
-./mystral run examples/sponza.js
-
 # Custom window size
 ./mystral run examples/simple-cube.js --width 1920 --height 1080
 
@@ -120,33 +103,10 @@ window.addEventListener("gamepadconnected", (e) => {
 | `test-audio.js` | Web Audio API test |
 | `test-gamepad.js` | Gamepad API test |
 | `mystral-helmet.js` | Full Mystral Engine with DamagedHelmet model |
-| `daynight.js` | Day/night cycle with atmosphere, stars, moon, torches |
-| `sponza.js` | Sponza palace with day/night cycle, torches, fireflies |
 
 Sample 3D models included in `examples/assets/`:
 - `DamagedHelmet.glb` - Khronos sample model
-- `Sponza.glb` - Intel Sponza palace model
 - `environment.hdr` - HDR environment map for IBL lighting
-
-## Hot Reload (Watch Mode)
-
-Enable automatic script reloading during development with `--watch` or `-w`:
-
-```bash
-# Watch for file changes and reload automatically
-./mystral run game.js --watch
-
-# Combine with other options
-./mystral run game.js -w --width 1920 --height 1080
-```
-
-When the watched file changes:
-1. All timers (setTimeout/setInterval) are cleared
-2. All requestAnimationFrame callbacks are cancelled
-3. Module caches are cleared
-4. The script is re-executed from scratch
-
-This enables fast iteration during development without restarting the runtime.
 
 ## Bundling for Distribution
 
@@ -190,10 +150,10 @@ Options:
 └─────────────────────────────────────────────────────────────┘
         │                │           │        │
         ▼                ▼           ▼        ▼
-   ┌─────────┐    ┌───────────┐  ┌─────┐  ┌──────┐  ┌───────┐
-   │ QuickJS │    │ wgpu-native│  │SDL3 │  │libcurl│  │ libuv │
-   │ V8/JSC  │    │ or Dawn   │  │     │  │      │  │       │
-   └─────────┘    └───────────┘  └─────┘  └──────┘  └───────┘
+   ┌─────────┐    ┌───────────┐  ┌─────┐  ┌──────┐
+   │ QuickJS │    │ wgpu-native│  │SDL3 │  │libcurl│
+   │ V8/JSC  │    │ or Dawn   │  │     │  │      │
+   └─────────┘    └───────────┘  └─────┘  └──────┘
 ```
 
 ## Supported APIs
@@ -224,28 +184,17 @@ Options:
 
 ## Build Options
 
-**Recommended for development (full shader compatibility):**
-```bash
-cmake -B build \
-  -DMYSTRAL_USE_V8=ON \
-  -DMYSTRAL_USE_DAWN=ON \
-  -DMYSTRAL_USE_QUICKJS=OFF \
-  -DMYSTRAL_USE_WGPU=OFF
-```
-
-**Alternative configurations:**
-
 Choose your JS engine:
 ```bash
-cmake -B build -DMYSTRAL_USE_V8=ON       # Recommended - Full V8 with JIT
-cmake -B build -DMYSTRAL_USE_QUICKJS=ON  # Smallest binary, good for CI
+cmake -B build -DMYSTRAL_USE_QUICKJS=ON  # Default - smallest binary
+cmake -B build -DMYSTRAL_USE_V8=ON       # Full V8 with JIT
 cmake -B build -DMYSTRAL_USE_JSC=ON      # macOS/iOS system engine
 ```
 
 Choose your WebGPU backend:
 ```bash
-cmake -B build -DMYSTRAL_USE_DAWN=ON     # Recommended - Chrome's implementation
-cmake -B build -DMYSTRAL_USE_WGPU=ON     # Best iOS/Android support
+cmake -B build -DMYSTRAL_USE_WGPU=ON     # Default - best iOS support
+cmake -B build -DMYSTRAL_USE_DAWN=ON     # Chrome's implementation
 ```
 
 ## Embedding in Your App
@@ -279,7 +228,6 @@ All dependencies are downloaded automatically as prebuilt binaries:
 | QuickJS / V8 / JSC | JavaScript engine |
 | Skia | Canvas 2D rendering |
 | libcurl | HTTP requests |
-| libuv | Async I/O, timers, file watching |
 | SWC | TypeScript transpiling |
 
 Prebuilt dependency binaries are managed via [mystralengine/library-builder](https://github.com/mystralengine/library-builder).
