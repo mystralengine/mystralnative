@@ -94,13 +94,6 @@ jobs:
         if: matrix.webgpu == 'dawn' && steps.cache-deps.outputs.cache-hit != 'true'
         run: node scripts/download-deps.mjs --only dawn
 
-      - name: Create SDL3 include symlink
-        run: |
-          if [ -d "third_party/sdl3/SDL3.xcframework" ]; then
-            mkdir -p third_party/sdl3/include
-            ln -sf ../SDL3.xcframework/macos-arm64_x86_64/SDL3.framework/Headers third_party/sdl3/include/SDL3
-          fi
-
       - name: Configure CMake
         run: |
           CMAKE_ARGS="-B build -DCMAKE_BUILD_TYPE=Release"
@@ -124,14 +117,17 @@ jobs:
       - name: Test CLI
         run: ./build/mystral --version
 
+      - name: Verify static linking
+        run: |
+          echo "Binary linkage (should NOT show SDL3 as dynamic dependency):"
+          otool -L build/mystral | head -20
+
       - name: Package artifacts
         run: |
           mkdir -p artifacts
+          # Single static binary - no SDL3 framework needed
           cp build/mystral artifacts/
           cp build/libmystral-runtime.a artifacts/ || true
-          if [ -d "third_party/sdl3/SDL3.xcframework/macos-arm64_x86_64/SDL3.framework" ]; then
-            cp -R third_party/sdl3/SDL3.xcframework/macos-arm64_x86_64/SDL3.framework artifacts/
-          fi
           cd artifacts && zip -r ../mystral-${{ matrix.name }}.zip .
 
       - name: Upload artifact
@@ -201,23 +197,9 @@ jobs:
         if: matrix.webgpu == 'dawn' && steps.cache-deps.outputs.cache-hit != 'true'
         run: node scripts/download-deps.mjs --only dawn
 
-      - name: Build SDL3 from source
-        if: steps.cache-deps.outputs.cache-hit != 'true'
-        run: |
-          cd third_party/sdl3
-          SDL_DIR=$(ls -d SDL3-* 2>/dev/null | head -1)
-          if [ -n "$SDL_DIR" ]; then
-            cd "$SDL_DIR"
-            cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=../installed
-            cmake --build build -j$(nproc)
-            cmake --install build
-            cd ..
-            ln -sf installed/lib lib
-            ln -sf installed/include include
-          fi
-
       - name: Configure CMake
         run: |
+          # SDL3 is built from source via add_subdirectory (static linking)
           CMAKE_ARGS="-B build -DCMAKE_BUILD_TYPE=Release"
           if [ "${{ matrix.js_engine }}" == "quickjs" ]; then
             CMAKE_ARGS="$CMAKE_ARGS -DMYSTRAL_USE_QUICKJS=ON -DMYSTRAL_USE_V8=OFF -DMYSTRAL_USE_JSC=OFF"
@@ -237,12 +219,17 @@ jobs:
       - name: Test CLI
         run: ./build/mystral --version
 
+      - name: Verify static linking
+        run: |
+          echo "Binary linkage (should NOT show libSDL3.so as dynamic dependency):"
+          ldd build/mystral | head -20 || true
+
       - name: Package artifacts
         run: |
           mkdir -p artifacts
+          # Single static binary - no SDL3 shared library needed
           cp build/mystral artifacts/
           cp build/libmystral-runtime.a artifacts/ || true
-          cp third_party/sdl3/installed/lib/libSDL3.so* artifacts/ || true
           cd artifacts && zip -r ../mystral-${{ matrix.name }}.zip .
 
       - name: Upload artifact
@@ -327,9 +314,9 @@ jobs:
         shell: bash
         run: |
           mkdir -p artifacts
+          # Single static binary - no SDL3.dll needed
           cp build/Release/mystral.exe artifacts/ || cp build/mystral.exe artifacts/
           cp build/Release/mystral-runtime.lib artifacts/ || cp build/mystral-runtime.lib artifacts/ || true
-          cp third_party/sdl3/bin/SDL3.dll artifacts/ || true
           cd artifacts && 7z a ../mystral-${{ matrix.name }}.zip .
 
       - name: Upload artifact
@@ -421,9 +408,9 @@ jobs:
         shell: bash
         run: |
           mkdir -p artifacts
+          # Single static binary - no SDL3.dll needed
           cp build/Release/mystral.exe artifacts/ || cp build/mystral.exe artifacts/
           cp build/Release/mystral-runtime.lib artifacts/ || cp build/mystral-runtime.lib artifacts/ || true
-          cp third_party/sdl3/bin/SDL3.dll artifacts/ || true
           cd artifacts && 7z a ../mystral-${{ matrix.name }}.zip .
 
       - name: Upload artifact

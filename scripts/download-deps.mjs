@@ -80,18 +80,11 @@ const DEPS = {
     },
   },
   sdl3: {
+    // SDL3 source - we build it statically for all platforms to get a single binary
     version: '3.2.8',
     getUrl: () => {
-      // SDL3 releases: https://github.com/libsdl-org/SDL/releases
-      if (platformName === 'macos') {
-        return `https://github.com/libsdl-org/SDL/releases/download/release-${DEPS.sdl3.version}/SDL3-${DEPS.sdl3.version}.dmg`;
-      } else if (platformName === 'windows') {
-        const arch = archName === 'x86_64' ? 'x64' : 'arm64';
-        return `https://github.com/libsdl-org/SDL/releases/download/release-${DEPS.sdl3.version}/SDL3-devel-${DEPS.sdl3.version}-VC.zip`;
-      } else {
-        // Linux - build from source or use package manager
-        return `https://github.com/libsdl-org/SDL/releases/download/release-${DEPS.sdl3.version}/SDL3-${DEPS.sdl3.version}.tar.gz`;
-      }
+      // Always download source tarball - we build it statically
+      return `https://github.com/libsdl-org/SDL/releases/download/release-${DEPS.sdl3.version}/SDL3-${DEPS.sdl3.version}.tar.gz`;
     },
     extractTo: 'sdl3',
   },

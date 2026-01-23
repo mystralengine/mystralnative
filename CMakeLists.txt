@@ -70,120 +70,75 @@ message(STATUS "WebGPU: Dawn=${MYSTRAL_USE_DAWN} wgpu=${MYSTRAL_USE_WGPU}")
 
 set(THIRD_PARTY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 
-# SDL3
-# Try to find SDL3 in third_party first, then system
+# SDL3 - Build from source as static library for single-binary distribution
 set(SDL3_DIR ${THIRD_PARTY_DIR}/sdl3)
 set(SDL3_FOUND OFF)
-if(ANDROID)
-    # Android uses separate sdl3-android directory with extracted AAR
-    set(SDL3_ANDROID_DIR ${THIRD_PARTY_DIR}/sdl3-android)
-    if(EXISTS ${SDL3_ANDROID_DIR}/extracted)
-        # SDL3 AAR extracted to: sdl3-android/extracted/prefab/modules/
-        set(SDL3_EXTRACTED_DIR ${SDL3_ANDROID_DIR}/extracted)
 
-        # Determine ABI from ANDROID_ABI variable set by NDK toolchain
-        if(ANDROID_ABI STREQUAL "arm64-v8a")
-            set(SDL3_ANDROID_ABI "arm64-v8a")
-        elseif(ANDROID_ABI STREQUAL "armeabi-v7a")
-            set(SDL3_ANDROID_ABI "armeabi-v7a")
-        elseif(ANDROID_ABI STREQUAL "x86_64")
-            set(SDL3_ANDROID_ABI "x86_64")
-        elseif(ANDROID_ABI STREQUAL "x86")
-            set(SDL3_ANDROID_ABI "x86")
-        else()
-            set(SDL3_ANDROID_ABI "arm64-v8a")  # Default to arm64
-        endif()
+# Find SDL3 source directory (SDL3-{version}/)
+file(GLOB SDL3_SOURCE_DIRS ${SDL3_DIR}/SDL3-*)
+if(SDL3_SOURCE_DIRS)
+    list(GET SDL3_SOURCE_DIRS 0 SDL3_SOURCE_DIR)
+    if(EXISTS ${SDL3_SOURCE_DIR}/CMakeLists.txt)
+        message(STATUS "Building SDL3 from source: ${SDL3_SOURCE_DIR}")
 
-        # Prefab structure from extracted AAR:
-        # Headers: extracted/prefab/modules/SDL3-Headers/include/SDL3/
-        # Library: extracted/prefab/modules/SDL3-shared/libs/android.{abi}/libSDL3.so
-        set(SDL3_PREFAB_HEADERS ${SDL3_EXTRACTED_DIR}/prefab/modules/SDL3-Headers)
-        set(SDL3_PREFAB_LIB ${SDL3_EXTRACTED_DIR}/prefab/modules/SDL3-shared)
+        # Configure SDL3 build options - static library only
+        set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+        set(SDL_STATIC ON CACHE BOOL "" FORCE)
+        set(SDL_TEST OFF CACHE BOOL "" FORCE)
+        set(SDL_TESTS OFF CACHE BOOL "" FORCE)
 
-        if(EXISTS ${SDL3_PREFAB_LIB}/libs/android.${SDL3_ANDROID_ABI}/libSDL3.so)
-            set(SDL3_LIBRARY ${SDL3_PREFAB_LIB}/libs/android.${SDL3_ANDROID_ABI}/libSDL3.so)
-            set(SDL3_INCLUDE_DIR ${SDL3_PREFAB_HEADERS}/include)
+        # Disable features we don't need to speed up build
+        set(SDL_RENDER OFF CACHE BOOL "" FORCE)
+
+        # Add SDL3 as a subdirectory
+        add_subdirectory(${SDL3_SOURCE_DIR} ${CMAKE_BINARY_DIR}/sdl3-build EXCLUDE_FROM_ALL)
+
+        # SDL3 creates SDL3::SDL3-static target
+        if(TARGET SDL3::SDL3-static)
             set(SDL3_FOUND ON)
-            message(STATUS "Found SDL3 for Android (${SDL3_ANDROID_ABI}): ${SDL3_LIBRARY}")
-            message(STATUS "SDL3 includes: ${SDL3_INCLUDE_DIR}")
+            set(SDL3_STATIC_TARGET SDL3::SDL3-static)
+            message(STATUS "SDL3 static library target: SDL3::SDL3-static")
+        elseif(TARGET SDL3-static)
+            set(SDL3_FOUND ON)
+            set(SDL3_STATIC_TARGET SDL3-static)
+            message(STATUS "SDL3 static library target: SDL3-static")
         else()
-            message(WARNING "SDL3 Android library not found at ${SDL3_PREFAB_LIB}/libs/android.${SDL3_ANDROID_ABI}/")
-            message(WARNING "Run 'node scripts/download-deps.mjs --android' first.")
+            message(WARNING "SDL3 static target not found after add_subdirectory")
         endif()
     else()
-        message(WARNING "SDL3 Android extracted AAR not found. Run 'node scripts/download-deps.mjs --android' first.")
-    endif()
-elseif(EXISTS ${SDL3_DIR})
-    if(APPLE)
-        # SDL3 comes as xcframework on macOS/iOS
-        # Structure: sdl3/SDL3.xcframework/{platform}/SDL3.framework
-        set(SDL3_XCFRAMEWORK ${SDL3_DIR}/SDL3.xcframework)
-
-        # Determine the correct framework slice for the target platform
-        if(MYSTRAL_PLATFORM STREQUAL "ios")
-            # iOS builds
-            if(CMAKE_OSX_SYSROOT MATCHES "simulator")
-                set(SDL3_SLICE "ios-arm64_x86_64-simulator")
-            else()
-                set(SDL3_SLICE "ios-arm64")
-            endif()
-        else()
-            # macOS builds
-            set(SDL3_SLICE "macos-arm64_x86_64")
-        endif()
-
-        if(EXISTS ${SDL3_XCFRAMEWORK}/${SDL3_SLICE}/SDL3.framework)
-            set(SDL3_FRAMEWORK_PATH ${SDL3_XCFRAMEWORK}/${SDL3_SLICE}/SDL3.framework)
-            # Use the include directory with symlink for <SDL3/SDL.h> style includes
-            # Symlink created by: ln -s ../SDL3.xcframework/.../Headers third_party/sdl3/include/SDL3
-            set(SDL3_INCLUDE_DIR ${SDL3_DIR}/include)
-            set(SDL3_LIBRARY ${SDL3_FRAMEWORK_PATH}/SDL3)
-            set(SDL3_FRAMEWORK_DIR ${SDL3_XCFRAMEWORK}/${SDL3_SLICE})
-            set(SDL3_FOUND ON)
-            message(STATUS "Found SDL3 framework: ${SDL3_FRAMEWORK_PATH}")
-        else()
-            message(WARNING "SDL3 xcframework not found at ${SDL3_XCFRAMEWORK}/${SDL3_SLICE}")
-        endif()
-    else()
-        # Look for library and headers
-        # Windows download extracts to SDL3-{version}/ subdirectory
-        file(GLOB SDL3_SUBDIRS ${SDL3_DIR}/SDL3-*)
-        if(SDL3_SUBDIRS)
-            list(GET SDL3_SUBDIRS 0 SDL3_ACTUAL_DIR)
-        else()
-            set(SDL3_ACTUAL_DIR ${SDL3_DIR})
-        endif()
-
-        if(WIN32)
-            # Windows: SDL3-{version}/lib/x64/SDL3.lib
-            find_library(SDL3_LIBRARY SDL3 PATHS
-                ${SDL3_ACTUAL_DIR}/lib/x64
-                ${SDL3_ACTUAL_DIR}/lib
-                ${SDL3_DIR}/lib/x64
-                ${SDL3_DIR}/lib
-            )
-        else()
-            find_library(SDL3_LIBRARY SDL3 PATHS ${SDL3_ACTUAL_DIR}/lib ${SDL3_DIR}/lib)
-        endif()
-        find_path(SDL3_INCLUDE_DIR SDL3/SDL.h PATHS
-            ${SDL3_ACTUAL_DIR}/include
-            ${SDL3_DIR}/include
-        )
-        if(SDL3_LIBRARY AND SDL3_INCLUDE_DIR)
-            set(SDL3_FOUND ON)
-            message(STATUS "Found SDL3: ${SDL3_LIBRARY}")
-            message(STATUS "SDL3 includes: ${SDL3_INCLUDE_DIR}")
-        endif()
+        message(WARNING "SDL3 CMakeLists.txt not found in ${SDL3_SOURCE_DIR}")
     endif()
 else()
-    find_package(SDL3 QUIET)
-    if(TARGET SDL3::SDL3)
-        set(SDL3_FOUND ON)
+    # Fallback: Check for pre-built SDL3 (Android AAR, etc.)
+    if(ANDROID)
+        set(SDL3_ANDROID_DIR ${THIRD_PARTY_DIR}/sdl3-android)
+        if(EXISTS ${SDL3_ANDROID_DIR}/extracted)
+            set(SDL3_EXTRACTED_DIR ${SDL3_ANDROID_DIR}/extracted)
+            if(ANDROID_ABI STREQUAL "arm64-v8a")
+                set(SDL3_ANDROID_ABI "arm64-v8a")
+            elseif(ANDROID_ABI STREQUAL "armeabi-v7a")
+                set(SDL3_ANDROID_ABI "armeabi-v7a")
+            elseif(ANDROID_ABI STREQUAL "x86_64")
+                set(SDL3_ANDROID_ABI "x86_64")
+            elseif(ANDROID_ABI STREQUAL "x86")
+                set(SDL3_ANDROID_ABI "x86")
+            else()
+                set(SDL3_ANDROID_ABI "arm64-v8a")
+            endif()
+            set(SDL3_PREFAB_HEADERS ${SDL3_EXTRACTED_DIR}/prefab/modules/SDL3-Headers)
+            set(SDL3_PREFAB_LIB ${SDL3_EXTRACTED_DIR}/prefab/modules/SDL3-shared)
+            if(EXISTS ${SDL3_PREFAB_LIB}/libs/android.${SDL3_ANDROID_ABI}/libSDL3.so)
+                set(SDL3_LIBRARY ${SDL3_PREFAB_LIB}/libs/android.${SDL3_ANDROID_ABI}/libSDL3.so)
+                set(SDL3_INCLUDE_DIR ${SDL3_PREFAB_HEADERS}/include)
+                set(SDL3_FOUND ON)
+                message(STATUS "Found SDL3 for Android: ${SDL3_LIBRARY}")
+            endif()
+        endif()
     endif()
 endif()
 
 if(NOT SDL3_FOUND)
-    message(WARNING "SDL3 not found. Run 'npm run deps:download:sdl3' first.")
+    message(WARNING "SDL3 not found. Run 'node scripts/download-deps.mjs' first.")
 endif()
 
 # wgpu-native
@@ -784,8 +739,13 @@ if(MYSTRAL_USE_V8 AND TARGET v8::v8)
     endif()
 endif()
 
-# SDL3 linkage
-if(TARGET SDL3::SDL3)
+# SDL3 linkage - prefer static target for single-binary distribution
+if(SDL3_STATIC_TARGET)
+    target_link_libraries(mystral-runtime PRIVATE ${SDL3_STATIC_TARGET})
+    message(STATUS "Linking SDL3 statically via ${SDL3_STATIC_TARGET}")
+elseif(TARGET SDL3::SDL3-static)
+    target_link_libraries(mystral-runtime PRIVATE SDL3::SDL3-static)
+elseif(TARGET SDL3::SDL3)
     target_link_libraries(mystral-runtime PRIVATE SDL3::SDL3)
 elseif(SDL3_LIBRARY)
     target_link_libraries(mystral-runtime PRIVATE ${SDL3_LIBRARY})
@@ -929,6 +889,17 @@ if(NOT MYSTRAL_PLATFORM STREQUAL "ios" AND NOT MYSTRAL_PLATFORM STREQUAL "androi
     add_executable(mystral src/cli/main.cpp)
     target_link_libraries(mystral PRIVATE mystral-runtime)
 
+    # macOS: Set rpath for redistributable binary
+    # The binary will look for SDL3.framework next to the executable
+    if(APPLE)
+        set_target_properties(mystral PROPERTIES
+            MACOSX_RPATH ON
+            # Use install rpath even in build output (for redistribution)
+            BUILD_WITH_INSTALL_RPATH ON
+            INSTALL_RPATH "@executable_path"
+        )
+    endif()
+
     # On Linux, the GNU linker needs help finding zlib (curl's transitive dependency).
     # Use --copy-dt-needed-entries to pull in dependencies from shared libraries.
     # Also allow multiple definitions because wgpu-native and swc both contain Rust runtime symbols.
@@ -952,6 +923,15 @@ if(NOT MYSTRAL_PLATFORM STREQUAL "ios" AND NOT MYSTRAL_PLATFORM STREQUAL "androi
     # For most development, use the CLI instead: mystral run game.js
     add_executable(embed-example examples/embed-example/main.cpp)
     target_link_libraries(embed-example PRIVATE mystral-runtime)
+
+    # macOS: Set rpath for redistributable binary
+    if(APPLE)
+        set_target_properties(embed-example PROPERTIES
+            MACOSX_RPATH ON
+            BUILD_WITH_INSTALL_RPATH ON
+            INSTALL_RPATH "@executable_path"
+        )
+    endif()
 
     # On Linux, the GNU linker needs help finding zlib (curl's transitive dependency).
     # Also allow multiple definitions because wgpu-native and swc both contain Rust runtime symbols.
