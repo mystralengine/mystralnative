@@ -254,6 +254,23 @@ const DEPS = {
     },
     extractTo: 'swc',
   },
+  'skia-win-static': {
+    // Static Skia + Dawn for Windows from mystralengine/library-builder
+    // This build uses /MT (static CRT) and includes dawn_combined.lib
+    // Use this for Windows Dawn builds to avoid CRT mismatch with Skia
+    // https://github.com/mystralengine/library-builder/releases
+    version: 'skia-win-static-1',
+    getUrl: () => {
+      if (platformName !== 'windows') {
+        console.warn('skia-win-static is only for Windows');
+        return null;
+      }
+      // Download from library-builder GitHub Actions artifacts
+      // This contains both skia.lib and dawn_combined.lib with /MT
+      return 'https://github.com/mystralengine/library-builder/releases/download/skia-win-static-1/skia-build-win-x64-static-gpu-release.zip';
+    },
+    extractTo: 'skia',  // Extract to same place as regular skia
+  },
   'skia-ios': {
     // Skia for iOS from olilarkin/skia-builder
     // https://github.com/olilarkin/skia-builder/releases
