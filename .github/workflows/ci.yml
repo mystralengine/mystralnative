@@ -413,7 +413,7 @@ jobs:
         id: cache-deps
         with:
           path: third_party
-          key: deps-windows-x64-dawn-v10-${{ hashFiles('scripts/download-deps.mjs') }}
+          key: deps-windows-x64-dawn-v11-${{ hashFiles('scripts/download-deps.mjs') }}
 
       - name: Download base dependencies
         if: steps.cache-deps.outputs.cache-hit != 'true'
@@ -436,7 +436,8 @@ jobs:
           export PATH="/c/Program Files/7-Zip:$PATH"
           # Download Skia + Dawn from library-builder (includes dawn_combined.lib with D3D11/D3D12)
           # This build uses /MT static CRT and has full WebGPU implementation
-          node scripts/download-deps.mjs --only skia-win-static
+          # Use --force to overwrite olilarkin skia with library-builder version
+          node scripts/download-deps.mjs --only skia-win-static --force
 
       - name: Install vcpkg dependencies
         run: |
