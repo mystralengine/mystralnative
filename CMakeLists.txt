@@ -725,8 +725,9 @@ if(EXISTS ${LIBUV_DIR} AND NOT IOS AND NOT ANDROID)
 
         # libuv requires additional system libraries on each platform
         if(WIN32)
-            # Windows: network and system libraries
-            set(LIBUV_SYSTEM_LIBS iphlpapi psapi userenv ws2_32)
+            # Windows: network, system, and debug libraries
+            # dbghelp is required for uv_kill stack trace functionality
+            set(LIBUV_SYSTEM_LIBS iphlpapi psapi userenv ws2_32 dbghelp)
         elseif(UNIX AND NOT APPLE)
             # Linux: pthread and dl
             set(LIBUV_SYSTEM_LIBS pthread dl)
