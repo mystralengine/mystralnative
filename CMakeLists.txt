@@ -19,8 +19,15 @@ option(MYSTRAL_USE_SWC "Enable SWC TypeScript transpiler" ON)
 # Must be after option() definitions so MYSTRAL_USE_V8 is properly set
 if(MYSTRAL_USE_V8)
     set(CMAKE_CXX_STANDARD 20)
+    message(STATUS "V8 enabled - using C++20")
+    # MSVC needs explicit flag for C++20 in CMAKE_CXX_FLAGS
+    # (add_compile_options can be overridden by vcpkg toolchain)
+    if(MSVC)
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /std:c++20")
+    endif()
 else()
     set(CMAKE_CXX_STANDARD 17)
+    message(STATUS "V8 disabled - using C++17")
 endif()
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -754,6 +761,14 @@ endif()
 
 if(MYSTRAL_USE_V8 AND TARGET v8::v8)
     target_sources(mystral-runtime PRIVATE src/js/v8_engine.cpp)
+    # V8 requires C++20 - force it at target level for MSVC
+    # MSVC needs /Zc:__cplusplus to report the correct __cplusplus value
+    # (V8 checks __cplusplus <= 201703L which fails without this flag)
+    if(MSVC)
+        target_compile_options(mystral-runtime PRIVATE /std:c++20 /Zc:__cplusplus)
+    else()
+        target_compile_features(mystral-runtime PRIVATE cxx_std_20)
+    endif()
     # On macOS with Dawn, V8 is linked specially in the Dawn section with -force_load
     # to handle Abseil symbol conflicts. Skip normal linking here but keep include dirs.
     if(APPLE AND MYSTRAL_USE_DAWN)
