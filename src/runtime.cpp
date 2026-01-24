@@ -5,9 +5,13 @@
 #include "mystral/js/engine.h"
 #include "mystral/js/module_system.h"
 #include "mystral/http/http_client.h"
+#include "mystral/http/async_http_client.h"
+#include "mystral/fs/async_file.h"
+#include "mystral/fs/file_watcher.h"
 #include "mystral/gltf/gltf_loader.h"
 #include "mystral/audio/audio_bindings.h"
 #include "mystral/vfs/embedded_bundle.h"
+#include "mystral/async/event_loop.h"
 #include <map>
 #include <iostream>
 
@@ -33,7 +37,15 @@
 #include <vector>
 #include <functional>
 #include <unordered_set>
+#include <queue>
+#include <mutex>
 #include <csignal>
+
+// libuv for precise timers (conditional)
+#if defined(MYSTRAL_HAS_LIBUV) && !defined(__ANDROID__) && !defined(IOS)
+#include <uv.h>
+#define MYSTRAL_USE_LIBUV_TIMERS 1
+#endif
 #include <cstdlib>
 #include <cstring>
 
@@ -395,6 +407,18 @@ public:
         // (Metal/WebGPU use signals during setup that we shouldn't intercept)
         installCrashHandlers();
 
+        // Initialize libuv event loop for async I/O (HTTP, file, timers)
+        async::EventLoop::instance().init();
+
+        // Initialize async HTTP client (uses libuv for non-blocking requests)
+        http::getAsyncHttpClient().init();
+
+        // Initialize async file reader (uses libuv thread pool for non-blocking file I/O)
+        fs::getAsyncFileReader().init();
+
+        // Initialize file watcher (uses libuv fs_event for hot reload)
+        fs::getFileWatcher().init();
+
         std::cout << "[Mystral] Runtime initialized" << std::endl;
         return true;
     }
@@ -407,6 +431,29 @@ public:
         // (Audio callback thread may be accessing JS handles)
         audio::cleanupAudioBindings();
 
+        // Shutdown async HTTP client (cancels pending requests)
+        http::getAsyncHttpClient().shutdown();
+
+        // Shutdown file watcher
+        fs::getFileWatcher().shutdown();
+
+#ifdef MYSTRAL_USE_LIBUV_TIMERS
+        // Clean up libuv timers before shutting down the event loop
+        for (auto& [id, ctx] : uvTimers_) {
+            if (ctx && !ctx->cancelled) {
+                uv_timer_stop(&ctx->handle);
+                if (jsEngine_) {
+                    jsEngine_->unprotect(ctx->callback);
+                }
+                uv_close(reinterpret_cast<uv_handle_t*>(&ctx->handle), nullptr);
+            }
+        }
+        uvTimers_.clear();
+#endif
+
+        // Shutdown libuv event loop (waits for pending handles to close)
+        async::EventLoop::instance().shutdown();
+
         // Unprotect all RAF callbacks before clearing
         if (jsEngine_) {
             for (auto& raf : rafCallbacks_) {
@@ -416,6 +463,7 @@ public:
         rafCallbacks_.clear();
 
         // Unprotect all timer callbacks before clearing
+#ifndef MYSTRAL_USE_LIBUV_TIMERS
         if (jsEngine_) {
             for (auto& timer : timerCallbacks_) {
                 if (!timer.cancelled) {
@@ -424,6 +472,7 @@ public:
             }
         }
         timerCallbacks_.clear();
+#endif
         cancelledTimerIds_.clear();
 
         if (moduleSystem_) {
@@ -520,12 +569,21 @@ public:
 
     // Check if there are any active (non-cancelled) timers
     bool hasActiveTimers() const {
+#ifdef MYSTRAL_USE_LIBUV_TIMERS
+        for (const auto& [id, ctx] : uvTimers_) {
+            if (ctx && !ctx->cancelled) {
+                return true;
+            }
+        }
+        return false;
+#else
         for (const auto& timer : timerCallbacks_) {
             if (!timer.cancelled) {
                 return true;
             }
         }
         return false;
+#endif
     }
 
     void renderFrame() {
@@ -544,8 +602,28 @@ public:
             }
         }
 
+        // Poll libuv event loop - process any ready I/O callbacks (non-blocking)
+        // This handles async HTTP requests, file I/O, and libuv-based timers
+        async::EventLoop::instance().runOnce();
+
+        // Process completed async HTTP requests (invoke their JS callbacks)
+        // This must be called after runOnce() to invoke callbacks safely on the main thread
+        http::getAsyncHttpClient().processCompletedRequests();
+
+        // Process completed async file reads (queues their callbacks)
+        // Note: We don't process the pending callbacks immediately because we might
+        // still be in a nested callback stack. The callbacks will be processed next frame.
+        fs::getAsyncFileReader().processCompletedReads();
+
+        // Process file watch events (for hot reload)
+        fs::getFileWatcher().processPendingEvents();
+
         // Execute timer callbacks (setTimeout, setInterval)
         executeTimerCallbacks();
+
+        // Process any queued file callbacks that were deferred from previous frames
+        // We process them here (after other callbacks) to ensure we're not in a nested callback stack
+        processPendingFileCallbacks();
 
         // Process microtask queue for promises
         processMicrotasks();
@@ -685,7 +763,168 @@ private:
     void setupTimers() {
         if (!jsEngine_) return;
 
+#ifdef MYSTRAL_USE_LIBUV_TIMERS
+        // libuv-based timers for precise timing
+        setupLibuvTimers();
+#else
+        // Fallback to std::chrono-based timers
+        setupChronoTimers();
+#endif
+    }
+
+#ifdef MYSTRAL_USE_LIBUV_TIMERS
+    // libuv timer callback - queues the JS callback for main thread processing
+    static void onUvTimerCallback(uv_timer_t* handle) {
+        auto* ctx = static_cast<UvTimerContext*>(handle->data);
+        if (!ctx || ctx->cancelled) return;
+
+        // Queue the callback for processing on the main thread
+        {
+            std::lock_guard<std::mutex> lock(ctx->runtime->timerMutex_);
+            ctx->runtime->pendingTimerCallbacks_.push({
+                ctx->id,
+                ctx->callback,
+                ctx->intervalMs
+            });
+        }
+
+        // For setTimeout (intervalMs == 0), mark as cancelled so we don't fire again
+        if (ctx->intervalMs == 0) {
+            ctx->cancelled = true;
+        }
+    }
+
+    // Close callback for timer handles
+    static void onTimerClose(uv_handle_t* handle) {
+        auto* ctx = static_cast<UvTimerContext*>(handle->data);
+        if (ctx && ctx->runtime) {
+            // Now it's safe to remove from the map - handle is fully closed
+            ctx->runtime->uvTimers_.erase(ctx->id);
+        }
+    }
+
+    int createUvTimer(js::JSValueHandle callback, int delayMs, int intervalMs) {
+        uv_loop_t* loop = async::EventLoop::instance().handle();
+        if (!loop) {
+            std::cerr << "[Timer] EventLoop not available" << std::endl;
+            return -1;
+        }
+
+        int id = nextTimerId_++;
+        jsEngine_->protect(callback);
+
+        auto ctx = std::make_unique<UvTimerContext>();
+        ctx->id = id;
+        ctx->callback = callback;
+        ctx->intervalMs = intervalMs;
+        ctx->cancelled = false;
+        ctx->runtime = this;
+        ctx->handle.data = ctx.get();
+
+        int result = uv_timer_init(loop, &ctx->handle);
+        if (result != 0) {
+            std::cerr << "[Timer] Failed to init timer: " << uv_strerror(result) << std::endl;
+            jsEngine_->unprotect(callback);
+            return -1;
+        }
+
+        // Start the timer
+        // For setInterval, use repeat; for setTimeout, use 0 repeat
+        uint64_t repeat = (intervalMs > 0) ? (uint64_t)intervalMs : 0;
+        result = uv_timer_start(&ctx->handle, onUvTimerCallback, (uint64_t)delayMs, repeat);
+        if (result != 0) {
+            std::cerr << "[Timer] Failed to start timer: " << uv_strerror(result) << std::endl;
+            uv_close(reinterpret_cast<uv_handle_t*>(&ctx->handle), nullptr);
+            jsEngine_->unprotect(callback);
+            return -1;
+        }
+
+        uvTimers_[id] = std::move(ctx);
+        return id;
+    }
+
+    void cancelUvTimer(int id) {
+        auto it = uvTimers_.find(id);
+        if (it == uvTimers_.end()) return;
+
+        auto& ctx = it->second;
+        if (ctx && !ctx->cancelled) {
+            ctx->cancelled = true;
+            cancelledTimerIds_.insert(id);
+            uv_timer_stop(&ctx->handle);
+            jsEngine_->unprotect(ctx->callback);
+            uv_close(reinterpret_cast<uv_handle_t*>(&ctx->handle), onTimerClose);
+        }
+    }
+
+    void setupLibuvTimers() {
         // setTimeout
+        jsEngine_->setGlobalProperty("setTimeout",
+            jsEngine_->newFunction("setTimeout", [this](void* ctx, const std::vector<js::JSValueHandle>& args) {
+                if (args.empty()) {
+                    return jsEngine_->newNumber(-1);
+                }
+
+                int delay = 0;
+                if (args.size() > 1) {
+                    delay = (int)jsEngine_->toNumber(args[1]);
+                }
+                if (delay < 0) delay = 0;
+
+                int id = createUvTimer(args[0], delay, 0);
+                return jsEngine_->newNumber(id);
+            })
+        );
+
+        // clearTimeout
+        jsEngine_->setGlobalProperty("clearTimeout",
+            jsEngine_->newFunction("clearTimeout", [this](void* ctx, const std::vector<js::JSValueHandle>& args) {
+                if (args.empty()) {
+                    return jsEngine_->newUndefined();
+                }
+
+                int id = (int)jsEngine_->toNumber(args[0]);
+                cancelUvTimer(id);
+                return jsEngine_->newUndefined();
+            })
+        );
+
+        // setInterval
+        jsEngine_->setGlobalProperty("setInterval",
+            jsEngine_->newFunction("setInterval", [this](void* ctx, const std::vector<js::JSValueHandle>& args) {
+                if (args.empty()) {
+                    return jsEngine_->newNumber(-1);
+                }
+
+                int delay = 0;
+                if (args.size() > 1) {
+                    delay = (int)jsEngine_->toNumber(args[1]);
+                }
+                if (delay < 1) delay = 1;  // Minimum 1ms for intervals
+
+                int id = createUvTimer(args[0], delay, delay);
+                return jsEngine_->newNumber(id);
+            })
+        );
+
+        // clearInterval
+        jsEngine_->setGlobalProperty("clearInterval",
+            jsEngine_->newFunction("clearInterval", [this](void* ctx, const std::vector<js::JSValueHandle>& args) {
+                if (args.empty()) {
+                    return jsEngine_->newUndefined();
+                }
+
+                int id = (int)jsEngine_->toNumber(args[0]);
+                cancelUvTimer(id);
+                return jsEngine_->newUndefined();
+            })
+        );
+    }
+#endif // MYSTRAL_USE_LIBUV_TIMERS
+
+#ifndef MYSTRAL_USE_LIBUV_TIMERS
+    void setupChronoTimers() {
+        // setTimeout (fallback using std::chrono)
         jsEngine_->setGlobalProperty("setTimeout",
             jsEngine_->newFunction("setTimeout", [this](void* ctx, const std::vector<js::JSValueHandle>& args) {
                 if (args.empty()) {
@@ -709,7 +948,7 @@ private:
             })
         );
 
-        // clearTimeout
+        // clearTimeout (fallback)
         jsEngine_->setGlobalProperty("clearTimeout",
             jsEngine_->newFunction("clearTimeout", [this](void* ctx, const std::vector<js::JSValueHandle>& args) {
                 if (args.empty()) {
@@ -730,7 +969,7 @@ private:
             })
         );
 
-        // setInterval
+        // setInterval (fallback)
         jsEngine_->setGlobalProperty("setInterval",
             jsEngine_->newFunction("setInterval", [this](void* ctx, const std::vector<js::JSValueHandle>& args) {
                 if (args.empty()) {
@@ -741,7 +980,7 @@ private:
                 if (args.size() > 1) {
                     delay = (int)jsEngine_->toNumber(args[1]);
                 }
-                if (delay < 1) delay = 1;  // Minimum 1ms for intervals
+                if (delay < 1) delay = 1;
 
                 int id = nextTimerId_++;
                 jsEngine_->protect(args[0]);
@@ -755,7 +994,7 @@ private:
             })
         );
 
-        // clearInterval (same as clearTimeout)
+        // clearInterval (fallback)
         jsEngine_->setGlobalProperty("clearInterval",
             jsEngine_->newFunction("clearInterval", [this](void* ctx, const std::vector<js::JSValueHandle>& args) {
                 if (args.empty()) {
@@ -763,8 +1002,6 @@ private:
                 }
 
                 int id = (int)jsEngine_->toNumber(args[0]);
-
-                // Mark as cancelled in case it's currently executing
                 cancelledTimerIds_.insert(id);
 
                 for (auto& timer : timerCallbacks_) {
@@ -779,6 +1016,7 @@ private:
             })
         );
     }
+#endif // !MYSTRAL_USE_LIBUV_TIMERS
 
     void setupPerformance() {
         if (!jsEngine_) return;
@@ -871,6 +1109,59 @@ private:
             })
         );
 
+        // Async file reading function - uses libuv thread pool for non-blocking I/O
+        // Takes (path, callback) where callback receives (data, error)
+        jsEngine_->setGlobalProperty("__readFileAsync",
+            jsEngine_->newFunction("__readFileAsync", [this](void* ctx, const std::vector<js::JSValueHandle>& args) {
+                if (args.size() < 2) {
+                    std::cerr << "[Fetch Async] Missing arguments (need path, callback)" << std::endl;
+                    return jsEngine_->newUndefined();
+                }
+
+                std::string path = jsEngine_->toString(args[0]);
+
+                // Handle file:// prefix
+                if (path.substr(0, 7) == "file://") {
+                    path = path.substr(7);
+                }
+
+                // Get and protect the callback so it survives until we call it
+                auto callback = args[1];
+                jsEngine_->protect(callback);
+
+                // Capture jsEngine pointer for the callback
+                auto* engine = jsEngine_.get();
+
+                // Check embedded bundle first (synchronously - it's fast)
+                std::vector<uint8_t> embeddedData;
+                if (vfs::readEmbeddedFile(path, embeddedData)) {
+                    std::cout << "[Fetch] Read " << embeddedData.size() << " bytes from bundle: " << path << std::endl;
+                    // Queue callback for next tick instead of calling immediately
+                    // This prevents stack overflow and matches browser async behavior
+                    pendingFileCallbacks_.push({
+                        callback,
+                        std::move(embeddedData),
+                        "" // no error
+                    });
+                    return jsEngine_->newUndefined();
+                }
+
+                // Use the async file reader with libuv thread pool
+                // The callback will be queued and invoked during processCompletedReads()
+                fs::getAsyncFileReader().readFile(path, [this, callback](std::vector<uint8_t> data, std::string error) {
+                    // This callback runs on the main thread during processCompletedReads()
+                    // Queue the callback with data for processing in the main loop
+                    pendingFileCallbacks_.push({
+                        callback,
+                        std::move(data),
+                        std::move(error)
+                    });
+                });
+
+                return jsEngine_->newUndefined();
+            })
+        );
+
         // Native HTTP request function
         jsEngine_->setGlobalProperty("__httpRequest",
             jsEngine_->newFunction("__httpRequest", [this](void* ctx, const std::vector<js::JSValueHandle>& args) {
@@ -941,6 +1232,86 @@ private:
                 std::cout << "[HTTP] Response: " << response.status << " (" << response.data.size() << " bytes)" << std::endl;
 
                 return result;
+            })
+        );
+
+        // Async HTTP request function - uses libuv for non-blocking I/O
+        // Takes (url, options, callback) where callback receives the result object
+        jsEngine_->setGlobalProperty("__httpRequestAsync",
+            jsEngine_->newFunction("__httpRequestAsync", [this](void* ctx, const std::vector<js::JSValueHandle>& args) {
+                if (args.size() < 3) {
+                    std::cerr << "[HTTP Async] Missing arguments (need url, options, callback)" << std::endl;
+                    return jsEngine_->newUndefined();
+                }
+
+                std::string url = jsEngine_->toString(args[0]);
+                std::string method = "GET";
+                std::vector<uint8_t> body;
+                http::HttpOptions options;
+
+                // Parse options object
+                if (!jsEngine_->isUndefined(args[1]) && !jsEngine_->isNull(args[1])) {
+                    auto optObj = args[1];
+
+                    auto methodVal = jsEngine_->getProperty(optObj, "method");
+                    if (!jsEngine_->isUndefined(methodVal)) {
+                        method = jsEngine_->toString(methodVal);
+                    }
+
+                    auto bodyVal = jsEngine_->getProperty(optObj, "body");
+                    if (!jsEngine_->isUndefined(bodyVal)) {
+                        if (jsEngine_->isString(bodyVal)) {
+                            std::string bodyStr = jsEngine_->toString(bodyVal);
+                            body.assign(bodyStr.begin(), bodyStr.end());
+                        } else {
+                            size_t size = 0;
+                            void* data = jsEngine_->getArrayBufferData(bodyVal, &size);
+                            if (data && size > 0) {
+                                body.assign(static_cast<uint8_t*>(data), static_cast<uint8_t*>(data) + size);
+                            }
+                        }
+                    }
+                }
+
+                // Get and protect the callback
+                auto callback = args[2];
+                jsEngine_->protect(callback);
+
+                // Capture jsEngine pointer for the callback
+                auto* engine = jsEngine_.get();
+
+                // Start async request
+                http::getAsyncHttpClient().request(method, url, body,
+                    [engine, callback](http::HttpResponse response) {
+                        // This runs on the main thread when the response arrives
+                        // Create result object
+                        auto result = engine->newObject();
+                        engine->setProperty(result, "ok", engine->newBoolean(response.ok));
+                        engine->setProperty(result, "status", engine->newNumber(response.status));
+                        engine->setProperty(result, "url", engine->newString(response.url.c_str()));
+
+                        if (!response.error.empty()) {
+                            engine->setProperty(result, "error", engine->newString(response.error.c_str()));
+                        }
+
+                        if (!response.data.empty()) {
+                            auto arrayBuffer = engine->newArrayBuffer(response.data.data(), response.data.size());
+                            engine->setProperty(result, "data", arrayBuffer);
+                        } else {
+                            engine->setProperty(result, "data", engine->newNull());
+                        }
+
+                        // Call the JS callback with the result
+                        std::vector<js::JSValueHandle> callbackArgs = { result };
+                        engine->call(callback, engine->newUndefined(), callbackArgs);
+
+                        // Unprotect the callback now that we're done
+                        engine->unprotect(callback);
+                    },
+                    options
+                );
+
+                return jsEngine_->newUndefined();
             })
         );
 
@@ -1136,25 +1507,28 @@ class Response {
 }
 
 // Fetch function - supports file://, http://, and https://
+// HTTP requests are now async via libuv (non-blocking)
 async function fetch(url, options = {}) {
     // Check URL type
     if (url.startsWith('http://') || url.startsWith('https://')) {
-        // HTTP/HTTPS request via native libcurl
-        const result = __httpRequest(url, options);
-
-        if (result.error) {
-            throw new Error('Fetch error: ' + result.error);
-        }
-
-        return new Response(result.data || new ArrayBuffer(0), {
-            ok: result.ok,
-            status: result.status,
-            statusText: result.ok ? 'OK' : 'Error',
-            url: result.url || url
+        // HTTP/HTTPS request via async libcurl + libuv (non-blocking)
+        return new Promise((resolve, reject) => {
+            __httpRequestAsync(url, options, (result) => {
+                if (result.error) {
+                    reject(new Error('Fetch error: ' + result.error));
+                } else {
+                    resolve(new Response(result.data || new ArrayBuffer(0), {
+                        ok: result.ok,
+                        status: result.status,
+                        statusText: result.ok ? 'OK' : 'Error',
+                        url: result.url || url
+                    }));
+                }
+            });
         });
     }
 
-    // File URL or relative path
+    // File URL or relative path - use async file reading for non-blocking I/O
     let path = url;
     if (url.startsWith('file://')) {
         path = url;
@@ -1165,21 +1539,27 @@ async function fetch(url, options = {}) {
         throw new Error('Unsupported URL scheme: ' + url.split('://')[0]);
     }
 
-    const data = __readFileSync(path);
-    if (data === null) {
-        return new Response(new ArrayBuffer(0), {
-            ok: false,
-            status: 404,
-            statusText: 'Not Found',
-            url: url
+    // Use async file reading to avoid blocking the render loop
+    return new Promise((resolve, reject) => {
+        __readFileAsync(path, (data, error) => {
+            if (error) {
+                reject(new Error('File read error: ' + error));
+            } else if (data === null) {
+                resolve(new Response(new ArrayBuffer(0), {
+                    ok: false,
+                    status: 404,
+                    statusText: 'Not Found',
+                    url: url
+                }));
+            } else {
+                resolve(new Response(data, {
+                    ok: true,
+                    status: 200,
+                    statusText: 'OK',
+                    url: url
+                }));
+            }
         });
-    }
-
-    return new Response(data, {
-        ok: true,
-        status: 200,
-        statusText: 'OK',
-        url: url
     });
 }
 
@@ -1492,6 +1872,41 @@ globalThis.loadGLTF = loadGLTF;
     }
 
     void executeTimerCallbacks() {
+#ifdef MYSTRAL_USE_LIBUV_TIMERS
+        // Process pending timer callbacks from libuv
+        std::queue<PendingTimerCallback> toProcess;
+        {
+            std::lock_guard<std::mutex> lock(timerMutex_);
+            std::swap(toProcess, pendingTimerCallbacks_);
+        }
+
+        while (!toProcess.empty()) {
+            auto pending = std::move(toProcess.front());
+            toProcess.pop();
+
+            // Check if cancelled while waiting in queue
+            if (cancelledTimerIds_.count(pending.id) > 0) {
+                cancelledTimerIds_.erase(pending.id);
+                continue;
+            }
+
+            // Call the callback
+            std::vector<js::JSValueHandle> args;
+            jsEngine_->call(pending.callback, jsEngine_->newUndefined(), args);
+
+            // For setTimeout (intervalMs == 0), clean up the timer
+            if (pending.intervalMs == 0) {
+                auto it = uvTimers_.find(pending.id);
+                if (it != uvTimers_.end()) {
+                    jsEngine_->unprotect(it->second->callback);
+                    // uv_close is async - onTimerClose will erase from map when done
+                    uv_close(reinterpret_cast<uv_handle_t*>(&it->second->handle), onTimerClose);
+                }
+            }
+            // For setInterval, libuv automatically repeats - nothing to do
+        }
+#else
+        // Fallback: std::chrono-based timer processing
         if (timerCallbacks_.empty()) return;
 
         auto now = std::chrono::high_resolution_clock::now();
@@ -1547,6 +1962,34 @@ globalThis.loadGLTF = loadGLTF;
                 jsEngine_->unprotect(timer.callback);
             }
         }
+#endif
+    }
+
+    void processPendingFileCallbacks() {
+        // Process pending file callbacks - these come from async file reads
+        // We process them on the main thread to ensure JS context safety
+
+        while (!pendingFileCallbacks_.empty()) {
+            auto pending = std::move(pendingFileCallbacks_.front());
+            pendingFileCallbacks_.pop();
+
+            if (pending.error.empty()) {
+                // Success - create ArrayBuffer and call callback with (data, null)
+                auto dataVal = jsEngine_->newArrayBuffer(pending.data.data(), pending.data.size());
+                auto errorVal = jsEngine_->newNull();
+                std::vector<js::JSValueHandle> callbackArgs = { dataVal, errorVal };
+                jsEngine_->call(pending.callback, jsEngine_->newUndefined(), callbackArgs);
+            } else {
+                // Error - call callback with (null, error)
+                auto nullVal = jsEngine_->newNull();
+                auto errorVal = jsEngine_->newString(pending.error.c_str());
+                std::vector<js::JSValueHandle> callbackArgs = { nullVal, errorVal };
+                jsEngine_->call(pending.callback, jsEngine_->newUndefined(), callbackArgs);
+            }
+
+            // Unprotect the callback now that we're done with it
+            jsEngine_->unprotect(pending.callback);
+        }
     }
 
     void processMicrotasks() {
@@ -1586,6 +2029,28 @@ globalThis.loadGLTF = loadGLTF;
     int nextRafId_ = 1;
 
     // setTimeout/setInterval state
+#ifdef MYSTRAL_USE_LIBUV_TIMERS
+    // libuv-based timer context
+    struct UvTimerContext {
+        uv_timer_t handle;
+        int id;
+        js::JSValueHandle callback;
+        int intervalMs;  // 0 for setTimeout, >0 for setInterval
+        bool cancelled;
+        RuntimeImpl* runtime;  // Back-reference for callback
+    };
+    std::map<int, std::unique_ptr<UvTimerContext>> uvTimers_;
+
+    // Pending timer callbacks (fired by libuv, processed on main thread)
+    struct PendingTimerCallback {
+        int id;
+        js::JSValueHandle callback;
+        int intervalMs;  // >0 means reschedule
+    };
+    std::queue<PendingTimerCallback> pendingTimerCallbacks_;
+    std::mutex timerMutex_;
+#else
+    // Fallback: std::chrono-based timers (for platforms without libuv)
     struct TimerCallback {
         int id;
         js::JSValueHandle callback;
@@ -1594,8 +2059,17 @@ globalThis.loadGLTF = loadGLTF;
         bool cancelled;
     };
     std::vector<TimerCallback> timerCallbacks_;
+#endif
     std::unordered_set<int> cancelledTimerIds_;  // Track IDs cancelled during callback execution
     int nextTimerId_ = 1;
+
+    // Pending async file read callbacks (processed on main thread)
+    struct PendingFileCallback {
+        js::JSValueHandle callback;
+        std::vector<uint8_t> data;
+        std::string error;
+    };
+    std::queue<PendingFileCallback> pendingFileCallbacks_;
 
     // DOM Event system
     struct EventListener {

@@ -36,15 +36,26 @@ cd mystralnative
 # Install bun if you don't have it
 curl -fsSL https://bun.sh/install | bash
 
-# Download dependencies and build
+# Download dependencies
 bun install
 bun run deps:download
-bun run configure
-bun run build
+
+# Configure with V8 + Dawn (recommended for full shader compatibility)
+cmake -B build \
+  -DMYSTRAL_USE_V8=ON \
+  -DMYSTRAL_USE_DAWN=ON \
+  -DMYSTRAL_USE_QUICKJS=OFF \
+  -DMYSTRAL_USE_WGPU=OFF
+
+# Build
+cmake --build build --parallel
 
 # Run an example
 ./build/mystral run examples/triangle.js
+./build/mystral run examples/mystral-helmet.js  # Full PBR scene
 ```
+
+**Note:** V8 + Dawn is recommended for development because wgpu-native does not yet support all WGSL shader features used by the Mystral engine.
 
 ## What Can You Build?
 
@@ -184,17 +195,28 @@ Options:
 
 ## Build Options
 
+**Recommended for development (full shader compatibility):**
+```bash
+cmake -B build \
+  -DMYSTRAL_USE_V8=ON \
+  -DMYSTRAL_USE_DAWN=ON \
+  -DMYSTRAL_USE_QUICKJS=OFF \
+  -DMYSTRAL_USE_WGPU=OFF
+```
+
+**Alternative configurations:**
+
 Choose your JS engine:
 ```bash
-cmake -B build -DMYSTRAL_USE_QUICKJS=ON  # Default - smallest binary
-cmake -B build -DMYSTRAL_USE_V8=ON       # Full V8 with JIT
+cmake -B build -DMYSTRAL_USE_V8=ON       # Recommended - Full V8 with JIT
+cmake -B build -DMYSTRAL_USE_QUICKJS=ON  # Smallest binary, good for CI
 cmake -B build -DMYSTRAL_USE_JSC=ON      # macOS/iOS system engine
 ```
 
 Choose your WebGPU backend:
 ```bash
-cmake -B build -DMYSTRAL_USE_WGPU=ON     # Default - best iOS support
-cmake -B build -DMYSTRAL_USE_DAWN=ON     # Chrome's implementation
+cmake -B build -DMYSTRAL_USE_DAWN=ON     # Recommended - Chrome's implementation
+cmake -B build -DMYSTRAL_USE_WGPU=ON     # Best iOS/Android support
 ```
 
 ## Embedding in Your App

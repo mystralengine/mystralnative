@@ -686,6 +686,60 @@ else()
     endif()
 endif()
 
+# libuv (async I/O library for non-blocking network, file, and timer operations)
+# Prebuilt layout: libuv/include/uv.h, libuv/include/uv/*.h, libuv/libuv.a (or libuv.lib)
+# Note: libuv is only used on desktop platforms; iOS/Android use platform-native async APIs
+set(LIBUV_DIR ${THIRD_PARTY_DIR}/libuv)
+if(EXISTS ${LIBUV_DIR} AND NOT IOS AND NOT ANDROID)
+    # Headers are directly in include/
+    if(EXISTS ${LIBUV_DIR}/include)
+        set(LIBUV_INCLUDE_DIR ${LIBUV_DIR}/include)
+    endif()
+
+    # Library is at root level (from library-builder output)
+    if(WIN32)
+        set(LIBUV_LIB_PATH ${LIBUV_DIR}/libuv.lib)
+    else()
+        set(LIBUV_LIB_PATH ${LIBUV_DIR}/libuv.a)
+    endif()
+
+    if(EXISTS ${LIBUV_LIB_PATH})
+        set(LIBUV_LIBRARY ${LIBUV_LIB_PATH})
+    else()
+        find_library(LIBUV_LIBRARY
+            NAMES uv libuv
+            PATHS ${LIBUV_DIR} ${LIBUV_DIR}/lib
+            NO_DEFAULT_PATH
+        )
+    endif()
+
+    if(LIBUV_LIBRARY AND LIBUV_INCLUDE_DIR)
+        add_library(libuv::libuv STATIC IMPORTED)
+        set_target_properties(libuv::libuv PROPERTIES
+            IMPORTED_LOCATION ${LIBUV_LIBRARY}
+            INTERFACE_INCLUDE_DIRECTORIES ${LIBUV_INCLUDE_DIR}
+        )
+        add_compile_definitions(MYSTRAL_HAS_LIBUV)
+        message(STATUS "Found libuv: ${LIBUV_LIBRARY}")
+        message(STATUS "libuv includes: ${LIBUV_INCLUDE_DIR}")
+
+        # libuv requires additional system libraries on each platform
+        if(WIN32)
+            # Windows: network and system libraries
+            set(LIBUV_SYSTEM_LIBS iphlpapi psapi userenv ws2_32)
+        elseif(UNIX AND NOT APPLE)
+            # Linux: pthread and dl
+            set(LIBUV_SYSTEM_LIBS pthread dl)
+        endif()
+    else()
+        message(WARNING "libuv library or headers not found:")
+        message(WARNING "  Library: ${LIBUV_LIB_PATH}")
+        message(WARNING "  Include: ${LIBUV_INCLUDE_DIR}")
+    endif()
+else()
+    message(STATUS "libuv not found - async I/O disabled. Run 'node scripts/download-deps.mjs --only libuv' to enable.")
+endif()
+
 # ============================================================================
 # Main Library
 # ============================================================================
@@ -708,10 +762,14 @@ set(MYSTRAL_SOURCES
     src/utils/stb_impl.cpp
     src/utils/cgltf_impl.cpp
     src/http/http_client.cpp
+    src/http/async_http_client.cpp
+    src/fs/async_file.cpp
+    src/fs/file_watcher.cpp
     src/gltf/gltf_loader.cpp
     src/audio/audio_context.cpp
     src/audio/audio_bindings.cpp
     src/vfs/embedded_bundle.cpp
+    src/async/event_loop.cpp
 )
 
 if(ANDROID)
@@ -928,6 +986,15 @@ if(TARGET swc::swc)
     # SWC (Rust) on Windows needs these system libraries
     if(WIN32)
         target_link_libraries(mystral-runtime PUBLIC userenv ntdll)
+    endif()
+endif()
+
+# libuv linkage (async I/O - non-blocking HTTP, file I/O, timers)
+if(TARGET libuv::libuv)
+    target_link_libraries(mystral-runtime PUBLIC libuv::libuv)
+    # libuv requires platform-specific system libraries
+    if(LIBUV_SYSTEM_LIBS)
+        target_link_libraries(mystral-runtime PUBLIC ${LIBUV_SYSTEM_LIBS})
     endif()
 endif()
 

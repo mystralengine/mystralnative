@@ -95,13 +95,14 @@ WGPUImageCopyTexture_Compat srcCopy = {};
 
 | Use Case | Recommended |
 |----------|-------------|
-| Cross-platform game | wgpu-native |
-| Chromium embedding | Dawn |
-| iOS/Android mobile | wgpu-native |
+| **Development with Mystral Engine** | **Dawn** (full WGSL shader support) |
+| iOS/Android mobile | wgpu-native (only option) |
+| CI builds / smallest binary | wgpu-native |
 | WebGPU conformance testing | Dawn |
-| Desktop app | Either |
 
-For most use cases, **wgpu-native is recommended** as it has better mobile support and simpler distribution (single static library).
+**For development, Dawn is recommended** because wgpu-native does not yet support all WGSL shader features used by the Mystral JS engine (e.g., certain texture sampling modes, shader features). The full Mystral engine examples like `mystral-helmet.js` require Dawn.
+
+For mobile builds (iOS/Android), wgpu-native is the only option as Dawn doesn't support these platforms.
 
 ## Version Information
 

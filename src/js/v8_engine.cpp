@@ -373,6 +373,8 @@ public:
     JSValueHandle newArrayBuffer(const uint8_t* data, size_t length) override {
         v8::Isolate::Scope isolate_scope(isolate_);
         v8::HandleScope handle_scope(isolate_);
+        v8::Local<v8::Context> context = context_.Get(isolate_);
+        v8::Context::Scope context_scope(context);
 
         // Create a backing store with a copy of the data
         std::unique_ptr<v8::BackingStore> backingStore = v8::ArrayBuffer::NewBackingStore(
@@ -394,6 +396,8 @@ public:
     JSValueHandle newArrayBufferExternal(void* data, size_t length) override {
         v8::Isolate::Scope isolate_scope(isolate_);
         v8::HandleScope handle_scope(isolate_);
+        v8::Local<v8::Context> context = context_.Get(isolate_);
+        v8::Context::Scope context_scope(context);
 
         // Create a backing store that references external memory without copying
         // Pass empty deleter since WebGPU manages this memory

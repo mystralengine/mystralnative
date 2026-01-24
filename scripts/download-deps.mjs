@@ -247,6 +247,34 @@ const DEPS = {
     },
     extractTo: 'swc',
   },
+  libuv: {
+    // libuv - async I/O library (used by Node.js)
+    // For non-blocking HTTP, file I/O, and timers
+    // https://github.com/mystralengine/library-builder/releases
+    version: 'libuv-1.51.0-5',
+    getUrl: () => {
+      const baseUrl = 'https://github.com/mystralengine/library-builder/releases/download/libuv-1.51.0-5';
+      if (platformName === 'macos') {
+        const arch = ARCH === 'arm64' ? 'arm64' : 'x86_64';
+        return `${baseUrl}/libuv-mac-${arch}.zip`;
+      } else if (platformName === 'linux') {
+        if (ARCH !== 'x64') {
+          console.warn(`libuv prebuilts not available for ${platformName}-${archName}`);
+          return null;
+        }
+        return `${baseUrl}/libuv-linux-x64.zip`;
+      } else if (platformName === 'windows') {
+        if (ARCH !== 'x64') {
+          console.warn(`libuv prebuilts not available for ${platformName}-${archName}`);
+          return null;
+        }
+        return `${baseUrl}/libuv-win-x64.zip`;
+      }
+      console.warn(`libuv prebuilts not available for ${platformName}-${archName}`);
+      return null;
+    },
+    extractTo: 'libuv',
+  },
   'skia-win-static': {
     // Static Skia + Dawn for Windows from mystralengine/library-builder
     // This build uses /MT (static CRT) and includes dawn_combined.lib with
@@ -630,7 +658,7 @@ async function main() {
   const onlyIndex = args.indexOf('--only');
 
   // Desktop deps (downloaded by default)
-  const desktopDeps = ['wgpu', 'sdl3', 'dawn', 'v8', 'quickjs', 'stb', 'cgltf', 'webp', 'skia', 'swc'];
+  const desktopDeps = ['wgpu', 'sdl3', 'dawn', 'v8', 'quickjs', 'stb', 'cgltf', 'webp', 'skia', 'swc', 'libuv'];
 
   // iOS deps (only downloaded with --only or --ios)
   const iosDeps = ['wgpu-ios', 'skia-ios'];
