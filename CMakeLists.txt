@@ -440,8 +440,12 @@ if(MYSTRAL_USE_V8)
         endif()
 
         # Find headers
+        # kuoruan/libv8 puts headers in include/ on Linux/macOS, but at root on Windows
         if(EXISTS ${V8_DIR}/include)
             set(V8_INCLUDE_DIR ${V8_DIR}/include)
+        elseif(EXISTS ${V8_DIR}/v8.h)
+            # Windows: headers are at root level
+            set(V8_INCLUDE_DIR ${V8_DIR})
         endif()
 
         if(V8_LIBRARY AND V8_INCLUDE_DIR)
