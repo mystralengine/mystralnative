@@ -761,6 +761,13 @@ endif()
 
 if(MYSTRAL_USE_V8 AND TARGET v8::v8)
     target_sources(mystral-runtime PRIVATE src/js/v8_engine.cpp)
+    # V8 requires C++20 - force it at target level for MSVC
+    # (CMAKE_CXX_STANDARD alone doesn't work with vcpkg toolchain)
+    if(MSVC)
+        target_compile_options(mystral-runtime PRIVATE /std:c++20)
+    else()
+        target_compile_features(mystral-runtime PRIVATE cxx_std_20)
+    endif()
     # On macOS with Dawn, V8 is linked specially in the Dawn section with -force_load
     # to handle Abseil symbol conflicts. Skip normal linking here but keep include dirs.
     if(APPLE AND MYSTRAL_USE_DAWN)
