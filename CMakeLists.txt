@@ -1,15 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 project(MystralNativeRuntime VERSION 0.1.0 LANGUAGES C CXX)
 
-# V8 requires C++20, so use that if V8 is enabled, otherwise C++17
-if(MYSTRAL_USE_V8)
-    set(CMAKE_CXX_STANDARD 20)
-else()
-    set(CMAKE_CXX_STANDARD 17)
-endif()
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-
 # Windows: Use /MT (static CRT) for all builds
 # Both Skia and Dawn (from library-builder) are built with /MT static CRT.
 # The CI workflow passes -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded for all Windows builds.
@@ -23,6 +14,16 @@ option(MYSTRAL_USE_V8 "Use V8 JavaScript engine" OFF)
 option(MYSTRAL_USE_JSC "Use JavaScriptCore engine" OFF)
 option(MYSTRAL_USE_QUICKJS "Use QuickJS engine" ON)  # Default - simplest to start
 option(MYSTRAL_USE_SWC "Enable SWC TypeScript transpiler" ON)
+
+# V8 requires C++20, so use that if V8 is enabled, otherwise C++17
+# Must be after option() definitions so MYSTRAL_USE_V8 is properly set
+if(MYSTRAL_USE_V8)
+    set(CMAKE_CXX_STANDARD 20)
+else()
+    set(CMAKE_CXX_STANDARD 17)
+endif()
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # WebGPU Implementation (choose one)
 option(MYSTRAL_USE_DAWN "Use Dawn WebGPU implementation" OFF)
