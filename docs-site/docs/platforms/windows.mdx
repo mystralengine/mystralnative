@@ -18,6 +18,18 @@ mystral-windows-x64-v8-dawn.zip
 
 ## Installation
 
+### Quick Install (PowerShell)
+
+```powershell
+irm https://mystralengine.github.io/mystralnative/install.ps1 | iex
+```
+
+This downloads the latest release, installs to `$HOME\.mystral\`, and adds `mystral` to your PATH. Then run:
+
+```powershell
+cd $HOME\.mystral; .\mystral.exe run examples\triangle.js
+```
+
 ### Manual Install
 
 1. Download from the [releases page](https://github.com/mystralengine/mystralnative/releases)

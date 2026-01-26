@@ -15,14 +15,28 @@ Think of it as "Electron for games" but without Chromium — just your game code
 
 ### Option 1: Install via CLI (Recommended)
 
+**macOS / Linux:**
+
 ```bash
 curl -fsSL https://mystralengine.github.io/mystralnative/install.sh | bash
 ```
 
-This detects your platform, downloads the latest release, installs to `~/.mystral/`, and adds `mystral` to your PATH. Then run:
+**Windows (PowerShell):**
+
+```powershell
+irm https://mystralengine.github.io/mystralnative/install.ps1 | iex
+```
+
+This detects your platform, downloads the latest release, installs to `~/.mystral/` (or `$HOME\.mystral\` on Windows), and adds `mystral` to your PATH. Then run:
 
 ```bash
-mystral run examples/triangle.js
+# macOS / Linux
+cd ~/.mystral && mystral run examples/triangle.js
+```
+
+```powershell
+# Windows (PowerShell)
+cd $HOME\.mystral; .\mystral.exe run examples\triangle.js
 ```
 
 ### Option 2: Download Prebuilt Binary

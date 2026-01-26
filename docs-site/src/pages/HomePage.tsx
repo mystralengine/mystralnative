@@ -29,7 +29,12 @@ export default function HomePage() {
           </p>
 
           <div className="install-command">
-            curl -fsSL https://mystralengine.github.io/mystralnative/install.sh | bash
+            <div style={{ marginBottom: '8px', color: '#8b949e', fontSize: '0.8rem' }}>macOS / Linux</div>
+            <div>curl -fsSL https://mystralengine.github.io/mystralnative/install.sh | bash</div>
+          </div>
+          <div className="install-command">
+            <div style={{ marginBottom: '8px', color: '#8b949e', fontSize: '0.8rem' }}>Windows (PowerShell)</div>
+            <div>irm https://mystralengine.github.io/mystralnative/install.ps1 | iex</div>
           </div>
 
           <div className="hero-buttons">
