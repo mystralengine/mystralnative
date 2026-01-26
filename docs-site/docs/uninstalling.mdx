@@ -1,0 +1,101 @@
+# Uninstalling
+
+Remove Mystral Native.js from your system.
+
+## Quick Uninstall
+
+If you installed via the install script (`curl ... | bash`), run:
+
+```bash
+# Remove the install directory
+rm -rf ~/.mystral
+
+# Remove PATH entry from your shell config
+# (The installer adds a line like: export PATH="$PATH:$HOME/.mystral")
+```
+
+Then remove the PATH line from your shell configuration file:
+
+### Bash
+
+```bash
+# Edit ~/.bashrc (or ~/.bash_profile)
+nano ~/.bashrc
+# Find and delete the lines:
+#   # MystralNative
+#   export PATH="$PATH:$HOME/.mystral"
+```
+
+### Zsh
+
+```bash
+# Edit ~/.zshrc
+nano ~/.zshrc
+# Find and delete the lines:
+#   # MystralNative
+#   export PATH="$PATH:$HOME/.mystral"
+```
+
+### Fish
+
+```bash
+# Edit ~/.config/fish/config.fish
+nano ~/.config/fish/config.fish
+# Find and delete the line:
+#   set -gx PATH $PATH $HOME/.mystral
+```
+
+## One-Liner
+
+Remove everything in one command (bash/zsh):
+
+```bash
+rm -rf ~/.mystral && sed -i.bak '/# MystralNative/d;/\.mystral/d' ~/.zshrc ~/.bashrc 2>/dev/null
+```
+
+On macOS, `sed -i` requires a backup extension (`.bak`). You can delete the backup files after:
+
+```bash
+rm -f ~/.zshrc.bak ~/.bashrc.bak
+```
+
+## Custom Install Directory
+
+If you installed to a custom directory via `MYSTRAL_INSTALL_DIR`, remove that directory instead:
+
+```bash
+rm -rf /path/to/your/install/dir
+```
+
+And remove the corresponding PATH entry from your shell config.
+
+## Verify
+
+After restarting your terminal, confirm it's removed:
+
+```bash
+which mystral
+# Should return nothing or "mystral not found"
+```
+
+## Manual Download
+
+If you downloaded a prebuilt binary manually (not via the install script), just delete the extracted directory:
+
+```bash
+rm -rf mystral-macOS-arm64-v8-dawn/
+```
+
+## Build from Source
+
+If you built from source, remove the cloned repository:
+
+```bash
+rm -rf mystralnative/
+```
+
+If you installed the binary system-wide:
+
+```bash
+sudo rm /usr/local/bin/mystral
+```

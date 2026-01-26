@@ -1,6 +1,6 @@
 # Configuration
 
-Configure MystralNative behavior at build time and runtime.
+Configure Mystral Native.js behavior at build time and runtime.
 
 ## Runtime Configuration
 
@@ -17,7 +17,7 @@ mystral run game.js \
 |--------|---------|-------------|
 | `--width` | 1280 | Window width in pixels |
 | `--height` | 720 | Window height in pixels |
-| `--title` | "MystralNative" | Window title |
+| `--title` | "Mystral Native.js" | Window title |
 | `--headless` | false | Run without window |
 | `--screenshot` | - | Take screenshot and exit |
 | `--frames` | 60 | Frames before screenshot |
@@ -75,7 +75,7 @@ cmake -B build \
 
 ### Adapter Selection
 
-By default, MystralNative requests a high-performance adapter:
+By default, Mystral Native.js requests a high-performance adapter:
 
 ```javascript
 const adapter = await navigator.gpu.requestAdapter({
@@ -107,7 +107,7 @@ const device = await adapter.requestDevice({
 
 ### High DPI
 
-MystralNative automatically handles high DPI displays. The canvas size matches the physical pixel dimensions.
+Mystral Native.js automatically handles high DPI displays. The canvas size matches the physical pixel dimensions.
 
 ```javascript
 // Get actual pixel dimensions
@@ -138,5 +138,5 @@ const response = await fetch("https://example.com/assets/model.glb");
 
 ## Next Steps
 
-- [CLI Commands](/docs/api/cli) - Full CLI reference
-- [JavaScript APIs](/docs/api/javascript) - Supported APIs
+- [CLI Commands](/mystralnative/docs/api/cli) - Full CLI reference
+- [JavaScript APIs](/mystralnative/docs/api/javascript) - Supported APIs

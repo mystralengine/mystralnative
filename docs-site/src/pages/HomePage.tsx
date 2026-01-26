@@ -5,7 +5,7 @@ export default function HomePage() {
     <>
       <nav className="navbar">
         <Link to="/" className="navbar-brand">
-          MystralNative
+          Mystral Native.js
         </Link>
         <div className="navbar-links">
           <Link to="/docs/getting-started">Docs</Link>
@@ -17,7 +17,7 @@ export default function HomePage() {
 
       <div style={{ marginTop: 'var(--navbar-height)' }}>
         <section className="hero">
-          <h1>MystralNative</h1>
+          <h1>Mystral Native.js</h1>
           <p>
             Run WebGPU games natively with JavaScript. Build once, run everywhere —
             macOS, Windows, Linux, iOS, and Android.

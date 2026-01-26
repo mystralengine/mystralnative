@@ -12,6 +12,7 @@ const sidebarItems = [
       { label: 'Introduction', path: 'getting-started' },
       { label: 'Installation', path: 'installation' },
       { label: 'Quick Start', path: 'quick-start' },
+      { label: 'Uninstalling', path: 'uninstalling' },
     ],
   },
   {
@@ -85,7 +86,7 @@ export default function DocPage() {
     <>
       <nav className="navbar">
         <Link to="/" className="navbar-brand">
-          MystralNative
+          Mystral Native.js
         </Link>
         <div className="navbar-links">
           <Link to="/docs/getting-started">Docs</Link>
