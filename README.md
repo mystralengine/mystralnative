@@ -266,12 +266,12 @@ Compile Options:
 
 | Platform | JS Engine Options | WebGPU Backend |
 |----------|-------------------|----------------|
-| macOS (arm64) | V8, QuickJS, JSC | Dawn, wgpu-native |
-| macOS (x64) | V8, QuickJS, JSC | Dawn, wgpu-native |
+| macOS (arm64) | V8, JSC, QuickJS | Dawn, wgpu-native |
+| macOS (x64) | V8, JSC, QuickJS | Dawn, wgpu-native |
 | Windows | V8, QuickJS | Dawn, wgpu-native |
 | Linux | V8, QuickJS | Dawn, wgpu-native |
-| iOS | JSC | wgpu-native |
-| Android | QuickJS | wgpu-native |
+| iOS | JSC, QuickJS | wgpu-native |
+| Android | V8, QuickJS | wgpu-native |
 
 ## Build Options
 
