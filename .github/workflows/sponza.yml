@@ -108,7 +108,15 @@ jobs:
           rm -f "$CERT_PATH"
           echo "Certificate imported successfully"
 
-      - name: Create macOS .app bundle (resources mode)
+      - name: Create standalone bundle
+        run: |
+          ./build/mystral compile ${{ env.DEMO_ENTRY }} \
+            --include ${{ env.DEMO_ASSETS }} \
+            --bundle-only \
+            --output build/sponza.bundle
+          echo "Bundle size: $(du -h build/sponza.bundle | awk '{print $1}')"
+
+      - name: Create macOS .app bundle
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
@@ -119,13 +127,12 @@ jobs:
             SIGN_ARGS="--team-id $APPLE_TEAM_ID"
           fi
 
-          # Resources mode: uses the regular mystral binary (clean Mach-O, properly signable)
-          # instead of a compiled binary (which has appended data that breaks codesign)
+          # Bundle mode: uses the regular mystral binary (clean Mach-O, properly signable)
+          # + a standalone game.bundle in Resources/ (auto-detected by runtime)
           ./scripts/package-app.sh \
             --binary build/mystral \
             --name "${{ env.DEMO_NAME }}" \
-            --script "${{ env.DEMO_ENTRY }}" \
-            --resources "${{ env.DEMO_ASSETS }}" \
+            --bundle build/sponza.bundle \
             --output dist \
             --bundle-id com.mystralengine.sponza \
             --version "1.0.0" \
