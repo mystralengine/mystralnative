@@ -49,20 +49,9 @@
 
 // Draco mesh decoder (conditional)
 #ifdef MYSTRAL_HAS_DRACO
-// Windows min/max macros from <windows.h> conflict with std::numeric_limits in Draco headers
-#ifdef _WIN32
-#pragma push_macro("min")
-#pragma push_macro("max")
-#undef min
-#undef max
-#endif
 #include <draco/compression/decode.h>
 #include <draco/mesh/mesh.h>
 #include <draco/core/decoder_buffer.h>
-#ifdef _WIN32
-#pragma pop_macro("min")
-#pragma pop_macro("max")
-#endif
 #endif
 #include <cstdlib>
 #include <cstring>

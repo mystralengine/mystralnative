@@ -136,16 +136,8 @@ download_and_install() {
         error "unzip is required but not installed."
     fi
 
-    # Remove the zip before moving extracted files
-    rm -f "$zipfile"
-
     # Move files to install directory
-    # Handle both nested (files in $BUILD_NAME/ subdir) and flat (files at root) zip structures
-    if [ -d "$tmpdir/$BUILD_NAME" ]; then
-        mv "$tmpdir/$BUILD_NAME"/* "$INSTALL_DIR/"
-    else
-        mv "$tmpdir"/* "$INSTALL_DIR/"
-    fi
+    mv "$tmpdir/$BUILD_NAME"/* "$INSTALL_DIR/" 2>/dev/null || mv "$tmpdir"/*/* "$INSTALL_DIR/" 2>/dev/null || true
 
     # Make executable
     chmod +x "$INSTALL_DIR/mystral"
