@@ -728,6 +728,9 @@ public:
         // Execute requestAnimationFrame callbacks (renders a frame)
         executeAnimationFrameCallbacks();
 
+        // Free non-protected handles created during this frame (V8 Persistent leak fix)
+        jsEngine_->clearFrameHandles();
+
         // TODO: Translate to Web events via InputShim
         // TODO: Dispatch to JS
 

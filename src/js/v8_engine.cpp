@@ -98,6 +98,12 @@ public:
 
     ~V8Engine() override {
         std::cout << "[V8] Destroying engine..." << std::endl;
+        // Clean up any remaining frame handles
+        for (auto* handle : frameHandles_) {
+            handle->Reset();
+            delete handle;
+        }
+        frameHandles_.clear();
         for (auto& entry : moduleCache_) {
             entry.second.Reset();
         }
@@ -208,6 +214,7 @@ public:
 
         // Store persistent handle
         v8::Persistent<v8::Value>* persistent = new v8::Persistent<v8::Value>(isolate_, result);
+        frameHandles_.insert(persistent);
         return {persistent, isolate_};
     }
 
@@ -267,6 +274,7 @@ public:
         }
 
         v8::Persistent<v8::Value>* persistent = new v8::Persistent<v8::Value>(isolate_, result);
+        frameHandles_.insert(persistent);
         return {persistent, isolate_};
     }
 
@@ -280,6 +288,7 @@ public:
         v8::Local<v8::Context> context = context_.Get(isolate_);
         v8::Local<v8::Object> global = context->Global();
         v8::Persistent<v8::Value>* persistent = new v8::Persistent<v8::Value>(isolate_, global);
+        frameHandles_.insert(persistent);
         return {persistent, isolate_};
     }
 
@@ -309,6 +318,7 @@ public:
         global->Get(context, v8::String::NewFromUtf8(isolate_, name).ToLocalChecked()).ToLocal(&result);
 
         v8::Persistent<v8::Value>* persistent = new v8::Persistent<v8::Value>(isolate_, result);
+        frameHandles_.insert(persistent);
         return {persistent, isolate_};
     }
 
@@ -320,6 +330,7 @@ public:
         v8::Isolate::Scope isolate_scope(isolate_);
         v8::HandleScope handle_scope(isolate_);
         v8::Persistent<v8::Value>* persistent = new v8::Persistent<v8::Value>(isolate_, v8::Undefined(isolate_));
+        frameHandles_.insert(persistent);
         return {persistent, isolate_};
     }
 
@@ -327,6 +338,7 @@ public:
         v8::Isolate::Scope isolate_scope(isolate_);
         v8::HandleScope handle_scope(isolate_);
         v8::Persistent<v8::Value>* persistent = new v8::Persistent<v8::Value>(isolate_, v8::Null(isolate_));
+        frameHandles_.insert(persistent);
         return {persistent, isolate_};
     }
 
@@ -334,6 +346,7 @@ public:
         v8::Isolate::Scope isolate_scope(isolate_);
         v8::HandleScope handle_scope(isolate_);
         v8::Persistent<v8::Value>* persistent = new v8::Persistent<v8::Value>(isolate_, v8::Boolean::New(isolate_, value));
+        frameHandles_.insert(persistent);
         return {persistent, isolate_};
     }
 
@@ -341,6 +354,7 @@ public:
         v8::Isolate::Scope isolate_scope(isolate_);
         v8::HandleScope handle_scope(isolate_);
         v8::Persistent<v8::Value>* persistent = new v8::Persistent<v8::Value>(isolate_, v8::Number::New(isolate_, value));
+        frameHandles_.insert(persistent);
         return {persistent, isolate_};
     }
 
@@ -349,6 +363,7 @@ public:
         v8::HandleScope handle_scope(isolate_);
         v8::Persistent<v8::Value>* persistent = new v8::Persistent<v8::Value>(
             isolate_, v8::String::NewFromUtf8(isolate_, value).ToLocalChecked());
+        frameHandles_.insert(persistent);
         return {persistent, isolate_};
     }
 
@@ -358,6 +373,7 @@ public:
         v8::Local<v8::Context> context = context_.Get(isolate_);
         v8::Context::Scope context_scope(context);
         v8::Persistent<v8::Value>* persistent = new v8::Persistent<v8::Value>(isolate_, v8::Object::New(isolate_));
+        frameHandles_.insert(persistent);
         return {persistent, isolate_};
     }
 
@@ -367,6 +383,7 @@ public:
         v8::Local<v8::Context> context = context_.Get(isolate_);
         v8::Context::Scope context_scope(context);
         v8::Persistent<v8::Value>* persistent = new v8::Persistent<v8::Value>(isolate_, v8::Array::New(isolate_, (int)length));
+        frameHandles_.insert(persistent);
         return {persistent, isolate_};
     }
 
@@ -390,6 +407,7 @@ public:
             isolate_, std::move(backingStore));
 
         v8::Persistent<v8::Value>* persistent = new v8::Persistent<v8::Value>(isolate_, arrayBuffer);
+        frameHandles_.insert(persistent);
         return {persistent, isolate_};
     }
 
@@ -411,6 +429,7 @@ public:
             isolate_, std::move(backingStore));
 
         v8::Persistent<v8::Value>* persistent = new v8::Persistent<v8::Value>(isolate_, arrayBuffer);
+        frameHandles_.insert(persistent);
         return {persistent, isolate_};
     }
 
@@ -457,6 +476,7 @@ public:
         v8::Local<v8::Float32Array> typedArray = v8::Float32Array::New(arrayBuffer, 0, count);
 
         v8::Persistent<v8::Value>* persistent = new v8::Persistent<v8::Value>(isolate_, typedArray);
+        frameHandles_.insert(persistent);
         return {persistent, isolate_};
     }
 
@@ -475,6 +495,7 @@ public:
         v8::Local<v8::Float32Array> typedArray = v8::Float32Array::New(arrayBuffer, 0, count);
 
         v8::Persistent<v8::Value>* persistent = new v8::Persistent<v8::Value>(isolate_, typedArray);
+        frameHandles_.insert(persistent);
         return {persistent, isolate_};
     }
 
@@ -491,6 +512,7 @@ public:
         v8::Local<v8::Uint32Array> typedArray = v8::Uint32Array::New(arrayBuffer, 0, count);
 
         v8::Persistent<v8::Value>* persistent = new v8::Persistent<v8::Value>(isolate_, typedArray);
+        frameHandles_.insert(persistent);
         return {persistent, isolate_};
     }
 
@@ -506,6 +528,7 @@ public:
         v8::Local<v8::Uint8Array> typedArray = v8::Uint8Array::New(arrayBuffer, 0, count);
 
         v8::Persistent<v8::Value>* persistent = new v8::Persistent<v8::Value>(isolate_, typedArray);
+        frameHandles_.insert(persistent);
         return {persistent, isolate_};
     }
 
@@ -519,10 +542,12 @@ public:
         auto* fnPtr = new NativeFunction(fn);
         v8::Local<v8::External> external = v8::External::New(isolate_, fnPtr);
 
-        v8::Local<v8::FunctionTemplate> templ = v8::FunctionTemplate::New(isolate_, nativeCallback, external);
-        v8::Local<v8::Function> func = templ->GetFunction(context).ToLocalChecked();
+        // Use Function::New instead of FunctionTemplate::New — lighter weight,
+        // avoids SharedFunctionInfo/FeedbackVector accumulation that prevents GC
+        v8::Local<v8::Function> func = v8::Function::New(context, nativeCallback, external).ToLocalChecked();
 
         v8::Persistent<v8::Value>* persistent = new v8::Persistent<v8::Value>(isolate_, func);
+        frameHandles_.insert(persistent);
         return {persistent, isolate_};
     }
 
@@ -646,6 +671,7 @@ public:
         objLocal->Get(context, v8::String::NewFromUtf8(isolate_, name).ToLocalChecked()).ToLocal(&result);
 
         v8::Persistent<v8::Value>* persistent = new v8::Persistent<v8::Value>(isolate_, result);
+        frameHandles_.insert(persistent);
         return {persistent, isolate_};
     }
 
@@ -675,6 +701,7 @@ public:
         objLocal->Get(context, index).ToLocal(&result);
 
         v8::Persistent<v8::Value>* persistent = new v8::Persistent<v8::Value>(isolate_, result);
+        frameHandles_.insert(persistent);
         return {persistent, isolate_};
     }
 
@@ -710,6 +737,7 @@ public:
         }
 
         v8::Persistent<v8::Value>* persistent = new v8::Persistent<v8::Value>(isolate_, result);
+        frameHandles_.insert(persistent);
         return {persistent, isolate_};
     }
 
@@ -724,8 +752,9 @@ public:
     }
 
     void unprotect(JSValueHandle value) override {
-        // Remove from protected set and delete
+        // Remove from protected set, frame handles, and delete
         g_protectedHandles.erase(value.ptr);
+        frameHandles_.erase((v8::Persistent<v8::Value>*)value.ptr);
         v8::Persistent<v8::Value>* persistent = (v8::Persistent<v8::Value>*)value.ptr;
         persistent->Reset();
         delete persistent;
@@ -733,6 +762,16 @@ public:
 
     void gc() override {
         isolate_->LowMemoryNotification();
+    }
+
+    void clearFrameHandles() override {
+        for (auto* handle : frameHandles_) {
+            if (g_protectedHandles.find(handle) == g_protectedHandles.end()) {
+                handle->Reset();
+                delete handle;
+            }
+        }
+        frameHandles_.clear();
     }
 
     // ========================================================================
@@ -977,6 +1016,9 @@ private:
         v8::Local<v8::Context> context = isolate->GetCurrentContext();
         v8::Context::Scope context_scope(context);
 
+        // Get engine for frame handle tracking
+        auto* engine = static_cast<V8Engine*>(isolate->GetData(0));
+
         // Get the native function from external data
         v8::Local<v8::External> external = info.Data().As<v8::External>();
         NativeFunction* fn = static_cast<NativeFunction*>(external->Value());
@@ -1024,6 +1066,10 @@ private:
         }
         if (result.ptr && !resultWasArg && g_protectedHandles.find(result.ptr) == g_protectedHandles.end()) {
             v8::Persistent<v8::Value>* resPersistent = (v8::Persistent<v8::Value>*)result.ptr;
+            // Remove from frame handles to avoid double-free in clearFrameHandles()
+            if (engine) {
+                engine->frameHandles_.erase(resPersistent);
+            }
             resPersistent->Reset();
             delete resPersistent;
         }
@@ -1037,6 +1083,7 @@ private:
     std::chrono::high_resolution_clock::time_point startTime_;
     std::unordered_map<std::string, v8::Global<v8::Module>> moduleCache_;
     std::unordered_map<int, std::string> moduleIdToPath_;  // Reverse lookup: module hash -> path
+    std::unordered_set<v8::Persistent<v8::Value>*> frameHandles_;  // Handles to free at end of frame
 };
 
 // Factory function

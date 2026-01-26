@@ -237,6 +237,14 @@ public:
      */
     virtual void gc() = 0;
 
+    /**
+     * Clear non-protected handles created during the current frame.
+     * Called at the end of each animation frame to free intermediate
+     * Persistent handles that are no longer needed (V8-specific concern).
+     * Default implementation is a no-op for engines that don't need it.
+     */
+    virtual void clearFrameHandles() {}
+
     // ========================================================================
     // Error Handling
     // ========================================================================
