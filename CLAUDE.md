@@ -40,19 +40,29 @@ These loaders are implemented in:
 
 ## Draco Compression Support
 
-GLBLoader now supports Draco-compressed meshes (`KHR_draco_mesh_compression`) via WebWorker-based WASM decoding.
+GLBLoader supports Draco-compressed meshes (`KHR_draco_mesh_compression`) with two decoder paths:
 
-### Setup for Bundled Decoder (Recommended)
+### Native C++ Decoder (MystralNative — Recommended)
 
-Copy the Draco decoder files to your public folder:
+When built with `-DMYSTRAL_USE_DRACO=ON` (the default when `third_party/draco/` exists), the native C++ Draco decoder runs on a **libuv thread pool thread** and bypasses WASM/Worker entirely. GLBLoader auto-detects this via `typeof __mystralNativeDecodeDracoAsync === 'function'`.
+
+```bash
+# Download prebuilt Draco library
+node scripts/download-deps.mjs --only draco
+```
+
+No WASM files needed — the native decoder is compiled into the binary.
+
+### WASM Fallback (Browser / No Native Draco)
+
+For browser builds or MystralNative builds without Draco, copy the WASM decoder:
 ```bash
 mkdir -p public/draco
 curl -o public/draco/draco_decoder.js https://www.gstatic.com/draco/versioned/decoders/1.5.6/draco_decoder.js
 curl -o public/draco/draco_decoder.wasm https://www.gstatic.com/draco/versioned/decoders/1.5.6/draco_decoder.wasm
 ```
 
-### Using CDN (No Setup Required)
-
+Or use CDN (no setup):
 ```javascript
 import { GLBLoader } from 'mystral';
 const loader = new GLBLoader(device, { dracoDecoderPath: 'cdn' });
@@ -79,6 +89,83 @@ cmake --build build --parallel
 ```
 
 See `README.md` for full build options.
+
+## Production Builds
+
+Use the local production build script to build, strip, filter assets, and package a macOS `.app` bundle. This mirrors what the GitHub Actions `sponza.yml` workflow does in CI.
+
+```bash
+# Full production build of Sponza demo (default)
+./scripts/build-production.sh
+
+# Build DamagedHelmet demo instead
+./scripts/build-production.sh --demo helmet
+
+# Skip cmake build (repackage with existing binary)
+./scripts/build-production.sh --skip-build
+
+# Skip stripping (keep debug symbols)
+./scripts/build-production.sh --skip-strip
+
+# Just compile the bundle, no .app packaging
+./scripts/build-production.sh --no-app
+```
+
+The script automatically:
+- Detects V8/Dawn/Draco from `third_party/` and sets CMake flags
+- Strips the binary (saves debug copy as `build/mystral-debug`)
+- Filters assets: includes only files needed for the target demo
+- Excludes WASM Draco decoder files when native C++ Draco is compiled in
+- Restores all removed files via `git checkout` on exit (safe for working tree)
+- Creates `.app` bundle + distributable `.zip` on macOS
+
+## Releases
+
+Releases are managed via GitHub Actions workflows in the **public** repo (`mystralengine/mystralnative`). The `.github/` directory is maintained separately in the public repo (not synced from private).
+
+### MystralNative Release (all platforms)
+
+Triggered by pushing a `v*` tag to the public repo:
+
+```bash
+cd ~/Projects/github/mystralengine/mystralnative
+
+# Create and push a version tag
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+This triggers `release.yml` which builds all platform/engine/backend combinations (macOS, Linux, Windows x V8, QuickJS, JSC x Dawn, wgpu) and creates a GitHub Release with download artifacts.
+
+Tags containing `alpha`, `beta`, or `rc` are marked as prerelease.
+
+Alternatively, use the **CD workflow** (`cd.yml`) for auto-versioning:
+- Go to Actions > CD > Run workflow
+- Select version bump type: `patch`, `minor`, or `major`
+- The workflow auto-increments `package.json`, creates the tag, builds, and releases
+
+### Sponza Demo Release
+
+Triggered by pushing a `sponza-v*` tag or manual dispatch:
+
+```bash
+cd ~/Projects/github/mystralengine/mystralnative
+
+# Create and push a sponza release tag
+git tag sponza-v1.1.0
+git push origin sponza-v1.1.0
+```
+
+This triggers `sponza.yml` which builds the Sponza demo for macOS (arm64), Linux (x64), and Windows (x64) with stripped binaries and filtered assets.
+
+Manual dispatch is also available via Actions > Sponza Demo Build > Run workflow.
+
+### Release Checklist
+
+1. Sync latest changes from private repo to public repo (see Repository Sync below)
+2. Commit any public-repo-only changes (e.g., `.github/workflows/`)
+3. Push tags to trigger release workflows
+4. Verify the GitHub Actions run succeeds and artifacts are published
 
 ## Repository Sync
 

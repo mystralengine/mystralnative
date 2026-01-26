@@ -115,6 +115,7 @@ jobs:
       - name: Prepare sponza assets
         run: |
           # Remove unused assets to keep bundle small (only Sponza.glb needed)
+          # Native C++ Draco decoder handles decompression — no WASM decoder needed
           rm -f examples/assets/DamagedHelmet.glb
           rm -f examples/assets/environment.hdr
           rm -f examples/assets/draco_decoder.js
@@ -122,14 +123,11 @@ jobs:
           rm -f examples/assets/draco-worker.js
           echo "Assets for bundle:"
           ls -lh examples/assets/
-          echo "Draco decoder:"
-          ls -lh draco/
 
       - name: Create standalone bundle
         run: |
           ./build/mystral compile ${{ env.DEMO_ENTRY }} \
             --include examples/assets \
-            --include draco \
             --bundle-only \
             --output build/sponza.bundle
           echo "Bundle size: $(du -h build/sponza.bundle | awk '{print $1}')"
@@ -257,6 +255,7 @@ jobs:
 
       - name: Prepare sponza assets
         run: |
+          # Native C++ Draco decoder handles decompression — no WASM decoder needed
           rm -f examples/assets/DamagedHelmet.glb
           rm -f examples/assets/environment.hdr
           rm -f examples/assets/draco_decoder.js
@@ -267,7 +266,6 @@ jobs:
         run: |
           ./build/mystral compile ${{ env.DEMO_ENTRY }} \
             --include examples/assets \
-            --include draco \
             --output build/sponza
           echo "Compiled binary size: $(du -h build/sponza | awk '{print $1}')"
 
@@ -352,6 +350,7 @@ jobs:
       - name: Prepare sponza assets
         shell: bash
         run: |
+          # Native C++ Draco decoder handles decompression — no WASM decoder needed
           rm -f examples/assets/DamagedHelmet.glb
           rm -f examples/assets/environment.hdr
           rm -f examples/assets/draco_decoder.js
@@ -368,7 +367,6 @@ jobs:
           fi
           "$MYSTRAL_BIN" compile "${{ env.DEMO_ENTRY }}" \
             --include examples/assets \
-            --include draco \
             --output build/sponza
 
           # Find the compiled output
