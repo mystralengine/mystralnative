@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(MystralNativeRuntime VERSION 0.0.7 LANGUAGES C CXX)
+project(MystralNativeRuntime VERSION 0.0.8 LANGUAGES C CXX)
 
 # Windows: Use /MT (static CRT) for all builds
 # Both Skia and Dawn (from library-builder) are built with /MT static CRT.

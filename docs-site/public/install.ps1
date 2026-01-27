@@ -43,10 +43,16 @@ function Write-Error-Exit($msg) {
 }
 
 function Get-Platform {
-    $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+    $arch = $env:PROCESSOR_ARCHITECTURE
     switch ($arch) {
-        "X64"   { return "windows-x64" }
-        "Arm64" { return "windows-arm64" }
+        "AMD64" { return "windows-x64" }
+        "ARM64" { return "windows-arm64" }
+        "x86"   {
+            # 32-bit PowerShell on 64-bit OS reports x86; check the real OS arch
+            $osArch = (Get-CimInstance Win32_OperatingSystem).OSArchitecture
+            if ($osArch -like "64*" -or $osArch -like "*x64*") { return "windows-x64" }
+            Write-Error-Exit "32-bit Windows is not supported."
+        }
         default { Write-Error-Exit "Unsupported architecture: $arch" }
     }
 }
