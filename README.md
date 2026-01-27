@@ -200,6 +200,21 @@ mystral compile game.js --include assets --bundle-only --out dist/game.bundle
 
 See the [distribution guide](https://mystralengine.github.io/mystralnative/docs/api/cli) for platform-specific packaging details including macOS `.app` bundles, code signing, and more.
 
+### Production Builds
+
+Use the production build script to create stripped, optimized, asset-filtered builds locally (mirrors CI):
+
+```bash
+# Full production build of Sponza demo (strips binary, filters assets, creates .app + .zip)
+./scripts/build-production.sh
+
+# Build a different demo
+./scripts/build-production.sh --demo helmet
+
+# Skip cmake rebuild (repackage with existing binary)
+./scripts/build-production.sh --skip-build
+```
+
 ## CLI Reference
 
 ```
@@ -333,6 +348,7 @@ All dependencies are downloaded automatically as prebuilt binaries:
 | Skia | Canvas 2D rendering |
 | libcurl | HTTP requests |
 | libuv | Async I/O, timers, file watching |
+| Draco | Native Draco mesh decompression (optional) |
 | SWC | TypeScript transpiling |
 
 Prebuilt dependency binaries are managed via [mystralengine/library-builder](https://github.com/mystralengine/library-builder).
