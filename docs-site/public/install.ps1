@@ -103,13 +103,15 @@ function Install-Mystral {
 
     Expand-Archive -Path $zipFile -DestinationPath $tmpDir -Force
 
-    # Move files — handle nested directory from zip
-    $extracted = Get-ChildItem -Path $tmpDir -Directory | Where-Object { $_.Name -ne "mystral-install-*" } | Select-Object -First 1
-    if ($extracted) {
-        Get-ChildItem -Path $extracted.FullName | Move-Item -Destination $InstallDir -Force
+    # Remove zip before moving files
+    Remove-Item -Path $zipFile -Force
+
+    # Move files — handle both nested ($buildName/ subdir) and flat (files at root) zip structures
+    $nestedDir = Join-Path $tmpDir $buildName
+    if (Test-Path $nestedDir) {
+        Get-ChildItem -Path $nestedDir | Move-Item -Destination $InstallDir -Force
     } else {
-        # Files might be at the root of the zip
-        Get-ChildItem -Path $tmpDir -Exclude "mystral.zip" | Move-Item -Destination $InstallDir -Force
+        Get-ChildItem -Path $tmpDir | Move-Item -Destination $InstallDir -Force
     }
 
     # Cleanup
