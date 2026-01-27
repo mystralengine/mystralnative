@@ -156,6 +156,8 @@ download_and_install() {
     success "Installed to $INSTALL_DIR"
 }
 
+CONFIGURED_SHELL_PROFILE=""
+
 setup_path() {
     local shell_profile=""
     local shell_name=$(basename "$SHELL")
@@ -187,8 +189,10 @@ setup_path() {
             echo "" >> "$shell_profile"
             echo "# MystralNative" >> "$shell_profile"
             echo "$path_line" >> "$shell_profile"
+            CONFIGURED_SHELL_PROFILE="$shell_profile"
             info "Added $INSTALL_DIR to PATH in $shell_profile"
         else
+            CONFIGURED_SHELL_PROFILE="$shell_profile"
             info "PATH already configured in $shell_profile"
         fi
     else
@@ -201,10 +205,15 @@ verify_installation() {
     if [ -x "$INSTALL_DIR/mystral" ]; then
         success "Installation complete!"
         echo ""
-        echo "To use mystral in this terminal:"
+        echo "To use mystral in this terminal session, run:"
         echo -e "  ${BLUE}export PATH=\"\$PATH:$INSTALL_DIR\"${NC}"
         echo ""
-        echo "Or start a new terminal session."
+        if [ -n "$CONFIGURED_SHELL_PROFILE" ]; then
+            echo -e "PATH has been added to ${BLUE}$CONFIGURED_SHELL_PROFILE${NC} for future terminal sessions."
+        else
+            echo "To make this permanent, add the following to your shell config (e.g. ~/.bashrc or ~/.zshrc):"
+            echo -e "  ${BLUE}export PATH=\"\$PATH:$INSTALL_DIR\"${NC}"
+        fi
         echo ""
         echo "Test your installation:"
         echo -e "  ${BLUE}mystral --version${NC}"

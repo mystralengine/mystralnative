@@ -152,7 +152,7 @@ protected:
 
 // Version info - uses CMake-defined MYSTRAL_VERSION
 #ifndef MYSTRAL_VERSION
-#define MYSTRAL_VERSION "0.0.2"
+#define MYSTRAL_VERSION "0.0.7"
 #endif
 
 inline const char* getVersion() {
