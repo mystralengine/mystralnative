@@ -279,9 +279,9 @@ const DEPS = {
     // Draco mesh compression library for native C++ decoding
     // Bypasses WASM/Worker entirely for Draco-compressed glTF meshes
     // https://github.com/mystralengine/library-builder/releases
-    version: 'draco-1.5.7-1',
+    version: 'draco-1.5.7-2',
     getUrl: () => {
-      const baseUrl = 'https://github.com/mystralengine/library-builder/releases/download/draco-1.5.7-1';
+      const baseUrl = 'https://github.com/mystralengine/library-builder/releases/download/draco-1.5.7-2';
       if (platformName === 'macos') {
         const arch = ARCH === 'arm64' ? 'arm64' : 'x86_64';
         return `${baseUrl}/draco-mac-${arch}.zip`;
