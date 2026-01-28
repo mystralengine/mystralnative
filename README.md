@@ -34,16 +34,20 @@ curl -fsSL https://mystralengine.github.io/mystralnative/install.sh | bash
 irm https://mystralengine.github.io/mystralnative/install.ps1 | iex
 ```
 
-This detects your platform, downloads the latest release, installs to `~/.mystral/` (or `$HOME\.mystral\` on Windows), and adds `mystral` to your PATH. Then run an example:
+This detects your platform, downloads the latest release, installs to `~/.mystral/` (or `$HOME\.mystral\` on Windows), and adds `mystral` to your PATH. Then run the examples:
 
 ```bash
 # macOS / Linux
-mystral run ~/.mystral/examples/triangle.js
+cd ~/.mystral
+mystral run examples/triangle.js
+mystral run examples/mystral-helmet.js  # GLTF loading demo
 ```
 
 ```powershell
 # Windows (PowerShell)
-mystral.exe run $HOME\.mystral\examples\triangle.js
+cd $HOME\.mystral
+mystral run examples\triangle.js
+mystral run examples\mystral-helmet.js  # GLTF loading demo
 ```
 
 ### Option 2: Download Prebuilt Binary
