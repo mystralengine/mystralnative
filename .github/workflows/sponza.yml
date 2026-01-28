@@ -1,0 +1,506 @@
+name: Sponza Demo Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag for the release (e.g., sponza-v1.0.0)'
+        required: false
+        default: ''
+  push:
+    tags:
+      - 'sponza-v*'
+
+permissions:
+  contents: write
+
+env:
+  DEMO_NAME: Sponza
+  DEMO_ENTRY: examples/sponza.js
+
+jobs:
+  # ===========================================================================
+  # macOS arm64 (V8 + Dawn)
+  # ===========================================================================
+  build-macos:
+    runs-on: macos-15
+    name: Build - macOS arm64
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        id: cache-deps
+        with:
+          path: third_party
+          key: sponza-deps-macos-arm64-dawn-${{ hashFiles('scripts/download-deps.mjs') }}
+
+      - name: Download dependencies
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: |
+          node scripts/download-deps.mjs
+          brew install p7zip || true
+          node scripts/download-deps.mjs --only v8
+          node scripts/download-deps.mjs --only dawn
+
+      - name: Create SDL3 include symlink
+        run: |
+          if [ -d "third_party/sdl3/SDL3.xcframework" ]; then
+            mkdir -p third_party/sdl3/include
+            ln -sf ../SDL3.xcframework/macos-arm64_x86_64/SDL3.framework/Headers third_party/sdl3/include/SDL3
+          fi
+
+      - name: Configure CMake (V8 + Dawn)
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+            -DMYSTRAL_USE_V8=ON \
+            -DMYSTRAL_USE_QUICKJS=OFF \
+            -DMYSTRAL_USE_JSC=OFF \
+            -DMYSTRAL_USE_DAWN=ON \
+            -DMYSTRAL_USE_WGPU=OFF
+
+      - name: Build
+        run: cmake --build build --config Release -j$(sysctl -n hw.ncpu)
+
+      - name: Verify build
+        run: ./build/mystral --version
+
+      # Import Apple Developer certificate if secrets are available
+      - name: Import signing certificate
+        if: env.APPLE_CERTIFICATE_BASE64 != ''
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          # Create temporary keychain
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -hex 32)
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Import certificate
+          CERT_PATH=$RUNNER_TEMP/certificate.p12
+          echo -n "$APPLE_CERTIFICATE_BASE64" | base64 --decode -o "$CERT_PATH"
+
+          security import "$CERT_PATH" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 \
+            -k "$KEYCHAIN_PATH"
+
+          security set-key-partition-list -S apple-tool:,apple: \
+            -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          security list-keychain -d user -s "$KEYCHAIN_PATH" login.keychain-db
+
+          # Clean up cert file
+          rm -f "$CERT_PATH"
+          echo "Certificate imported successfully"
+
+      - name: Strip binary
+        run: |
+          strip build/mystral
+          echo "Stripped binary size: $(du -h build/mystral | awk '{print $1}')"
+
+      - name: Prepare sponza assets
+        run: |
+          # Remove unused assets to keep bundle small (only Sponza.glb needed)
+          # Native C++ Draco decoder handles decompression — no WASM decoder needed
+          rm -f examples/assets/DamagedHelmet.glb
+          rm -f examples/assets/environment.hdr
+          rm -f examples/assets/draco_decoder.js
+          rm -f examples/assets/draco_decoder.wasm
+          rm -f examples/assets/draco-worker.js
+          echo "Assets for bundle:"
+          ls -lh examples/assets/
+
+      - name: Create standalone bundle
+        run: |
+          ./build/mystral compile ${{ env.DEMO_ENTRY }} \
+            --include examples/assets \
+            --bundle-only \
+            --output build/sponza.bundle
+          echo "Bundle size: $(du -h build/sponza.bundle | awk '{print $1}')"
+
+      - name: Create macOS .app bundle
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          chmod +x scripts/package-app.sh
+
+          SIGN_ARGS=""
+          if [ -n "${APPLE_TEAM_ID:-}" ]; then
+            SIGN_ARGS="--team-id $APPLE_TEAM_ID"
+          fi
+
+          # Bundle mode: uses the regular mystral binary (clean Mach-O, properly signable)
+          # + a standalone game.bundle in Resources/ (auto-detected by runtime)
+          ./scripts/package-app.sh \
+            --binary build/mystral \
+            --name "${{ env.DEMO_NAME }}" \
+            --bundle build/sponza.bundle \
+            --output dist \
+            --bundle-id com.mystralengine.sponza \
+            --version "1.0.0" \
+            $SIGN_ARGS
+
+      - name: Package as zip
+        run: |
+          cd dist
+          zip -r ../Sponza-macOS-arm64.zip Sponza.app
+          echo "Package size: $(du -h ../Sponza-macOS-arm64.zip | awk '{print $1}')"
+
+      # Clean up keychain
+      - name: Clean up signing
+        if: always() && env.APPLE_CERTIFICATE_BASE64 != ''
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+        run: |
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sponza-macOS-arm64
+          path: Sponza-macOS-arm64.zip
+
+  # ===========================================================================
+  # Linux x64 (V8 + Dawn)
+  # ===========================================================================
+  build-linux:
+    runs-on: ubuntu-24.04
+    name: Build - Linux x64
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install system dependencies
+        run: |
+          # Remove Microsoft repos that sometimes return 403 on GitHub Actions runners
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake build-essential libx11-dev libxext-dev libxrandr-dev \
+            libxi-dev libxinerama-dev libxcursor-dev libwayland-dev \
+            libxkbcommon-dev libegl-dev libgles-dev libcurl4-openssl-dev \
+            zlib1g-dev libfontconfig1-dev p7zip-full
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        id: cache-deps
+        with:
+          path: third_party
+          key: sponza-deps-linux-x64-dawn-v5-${{ hashFiles('scripts/download-deps.mjs') }}
+
+      - name: Download dependencies
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: |
+          node scripts/download-deps.mjs
+          node scripts/download-deps.mjs --only v8
+          node scripts/download-deps.mjs --only dawn
+
+      - name: Build SDL3 from source
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: |
+          cd third_party/sdl3
+          SDL_DIR=$(ls -d SDL3-* 2>/dev/null | head -1)
+          if [ -n "$SDL_DIR" ]; then
+            cd "$SDL_DIR"
+            cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=../installed
+            cmake --build build -j$(nproc)
+            cmake --install build
+            cd ..
+            ln -sf installed/lib lib
+            ln -sf installed/include include
+          fi
+
+      - name: Configure CMake (V8 + Dawn)
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+            -DMYSTRAL_USE_V8=ON \
+            -DMYSTRAL_USE_QUICKJS=OFF \
+            -DMYSTRAL_USE_JSC=OFF \
+            -DMYSTRAL_USE_DAWN=ON \
+            -DMYSTRAL_USE_WGPU=OFF
+
+      - name: Build
+        run: cmake --build build --config Release -j$(nproc)
+
+      - name: Verify build
+        run: ./build/mystral --version
+
+      - name: Strip binary
+        run: |
+          strip build/mystral
+          echo "Stripped binary size: $(du -h build/mystral | awk '{print $1}')"
+
+      - name: Prepare sponza assets
+        run: |
+          # Native C++ Draco decoder handles decompression — no WASM decoder needed
+          rm -f examples/assets/DamagedHelmet.glb
+          rm -f examples/assets/environment.hdr
+          rm -f examples/assets/draco_decoder.js
+          rm -f examples/assets/draco_decoder.wasm
+          rm -f examples/assets/draco-worker.js
+
+      - name: Compile Sponza demo
+        run: |
+          ./build/mystral compile ${{ env.DEMO_ENTRY }} \
+            --include examples/assets \
+            --output build/sponza
+          echo "Compiled binary size: $(du -h build/sponza | awk '{print $1}')"
+
+      - name: Package for Linux
+        run: |
+          mkdir -p dist/Sponza
+          cp build/sponza dist/Sponza/sponza
+          chmod +x dist/Sponza/sponza
+          cd dist
+          zip -r ../Sponza-linux-x64.zip Sponza
+          echo "Package size: $(du -h ../Sponza-linux-x64.zip | awk '{print $1}')"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sponza-linux-x64
+          path: Sponza-linux-x64.zip
+
+  # ===========================================================================
+  # Windows x64 (V8 + Dawn)
+  # ===========================================================================
+  build-windows:
+    runs-on: windows-2022
+    name: Build - Windows x64
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        id: cache-deps
+        with:
+          path: third_party
+          key: sponza-deps-windows-x64-dawn-v13-${{ hashFiles('scripts/download-deps.mjs') }}
+
+      - name: Download dependencies
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          export PATH="/c/Program Files/7-Zip:$PATH"
+          node scripts/download-deps.mjs
+          node scripts/download-deps.mjs --only v8
+          node scripts/download-deps.mjs --only dawn
+          node scripts/download-deps.mjs --only skia-win-static
+
+      - name: Install vcpkg dependencies
+        run: |
+          vcpkg install curl:x64-windows-static zlib:x64-windows-static
+          vcpkg integrate install
+
+      - name: Configure CMake (V8 + Dawn)
+        run: |
+          $CMAKE_ARGS = @(
+            "-B", "build",
+            "-DCMAKE_BUILD_TYPE=Release",
+            "-DMYSTRAL_USE_V8=ON",
+            "-DMYSTRAL_USE_QUICKJS=OFF",
+            "-DMYSTRAL_USE_JSC=OFF",
+            "-DMYSTRAL_USE_DAWN=ON",
+            "-DMYSTRAL_USE_WGPU=OFF",
+            "-DVCPKG_TARGET_TRIPLET=x64-windows-static",
+            "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded",
+            "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          )
+          cmake @CMAKE_ARGS
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Verify build
+        shell: bash
+        run: ./build/Release/mystral.exe --version || echo "Build complete"
+
+      - name: Prepare sponza assets
+        shell: bash
+        run: |
+          # Native C++ Draco decoder handles decompression — no WASM decoder needed
+          rm -f examples/assets/DamagedHelmet.glb
+          rm -f examples/assets/environment.hdr
+          rm -f examples/assets/draco_decoder.js
+          rm -f examples/assets/draco_decoder.wasm
+          rm -f examples/assets/draco-worker.js
+
+      - name: Compile Sponza demo
+        shell: bash
+        run: |
+          # Windows MSVC puts binary in build/Release/
+          MYSTRAL_BIN="build/Release/mystral.exe"
+          if [ ! -f "$MYSTRAL_BIN" ]; then
+            MYSTRAL_BIN="build/mystral.exe"
+          fi
+          "$MYSTRAL_BIN" compile "${{ env.DEMO_ENTRY }}" \
+            --include examples/assets \
+            --output build/sponza
+
+          # Find the compiled output
+          if [ -f "build/sponza.exe" ]; then
+            echo "Compiled binary size: $(du -h build/sponza.exe | awk '{print $1}')"
+          elif [ -f "build/Release/sponza.exe" ]; then
+            echo "Compiled binary size: $(du -h build/Release/sponza.exe | awk '{print $1}')"
+          fi
+
+      - name: Package for Windows
+        shell: bash
+        run: |
+          mkdir -p dist/Sponza
+          # Find sponza.exe (could be in build/ or build/Release/)
+          if [ -f "build/sponza.exe" ]; then
+            cp build/sponza.exe dist/Sponza/
+          elif [ -f "build/Release/sponza.exe" ]; then
+            cp build/Release/sponza.exe dist/Sponza/
+          fi
+          # Copy any needed DLLs
+          cp build/Release/*.dll dist/Sponza/ 2>/dev/null || true
+          cp third_party/sdl3/bin/SDL3.dll dist/Sponza/ 2>/dev/null || true
+          cd dist
+          7z a ../Sponza-windows-x64.zip Sponza
+          echo "Package size:"
+          ls -lh ../Sponza-windows-x64.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sponza-windows-x64
+          path: Sponza-windows-x64.zip
+
+  # ===========================================================================
+  # Create Release
+  # ===========================================================================
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [build-macos, build-linux, build-windows]
+    if: always() && (github.event_name == 'push' || github.event.inputs.version != '')
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          else
+            VERSION="${{ github.event.inputs.version }}"
+            if [ -z "$VERSION" ]; then
+              VERSION="sponza-v$(date +%Y%m%d)"
+            fi
+            echo "tag=${VERSION}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release
+          cp artifacts/Sponza-macOS-arm64/Sponza-macOS-arm64.zip release/ 2>/dev/null || true
+          cp artifacts/Sponza-linux-x64/Sponza-linux-x64.zip release/ 2>/dev/null || true
+          cp artifacts/Sponza-windows-x64/Sponza-windows-x64.zip release/ 2>/dev/null || true
+          echo "Release files:"
+          ls -lh release/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "Sponza Demo (${{ steps.version.outputs.tag }})"
+          draft: false
+          prerelease: true
+          body: |
+            ## Sponza Demo
+
+            A standalone demo of the Sponza palace rendered natively with WebGPU via MystralNative (V8 + Dawn).
+
+            Uses Draco mesh compression + WebP textures for optimized asset size.
+
+            ### Downloads
+
+            | Platform | File | GPU Requirement |
+            |----------|------|-----------------|
+            | macOS (Apple Silicon) | `Sponza-macOS-arm64.zip` | Metal (macOS 13+) |
+            | Linux (x64) | `Sponza-linux-x64.zip` | Vulkan |
+            | Windows (x64) | `Sponza-windows-x64.zip` | DirectX 12 |
+
+            ### Running
+
+            **macOS:**
+            ```bash
+            unzip Sponza-macOS-arm64.zip
+            # First launch: right-click Sponza.app > Open (to bypass Gatekeeper)
+            open Sponza.app
+            ```
+
+            **Linux:**
+            ```bash
+            unzip Sponza-linux-x64.zip
+            cd Sponza
+            chmod +x sponza
+            ./sponza
+            ```
+
+            **Windows:**
+            Extract `Sponza-windows-x64.zip` and double-click `sponza.exe`.
+
+            ### Controls
+            - **WASD** — Move camera
+            - **Mouse** — Look around
+
+            ### Features
+            - Real-time day/night cycle with sun and moon
+            - Dynamic torch lighting with flickering
+            - Firefly particle effects
+            - Fog with time-of-day color transitions
+            - Post-processing: bloom, god rays, tone mapping
+
+            Built with [MystralNative](https://github.com/mystralengine/mystralnative).
+          files: |
+            release/Sponza-*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summary
+        run: |
+          echo "## Sponza Demo Release" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Tag: ${{ steps.version.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Artifacts" >> $GITHUB_STEP_SUMMARY
+          ls -lh release/ >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "No artifacts" >> $GITHUB_STEP_SUMMARY

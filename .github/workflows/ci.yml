@@ -1,0 +1,583 @@
+name: CI
+
+on:
+  # Manual trigger only - we don't want CI running on every push during development
+  workflow_dispatch:
+    inputs:
+      build_filter:
+        description: 'Which builds to run'
+        required: false
+        type: choice
+        options:
+          - all
+          - windows-only
+          - windows-dawn-only
+          - macos-only
+          - linux-only
+        default: 'all'
+
+jobs:
+  # =============================================================================
+  # macOS Builds
+  # =============================================================================
+  build-macos:
+    if: ${{ inputs.build_filter == 'all' || inputs.build_filter == 'macos-only' }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS ARM64 - QuickJS + wgpu (default)
+          - os: macos-15
+            arch: arm64
+            js_engine: quickjs
+            webgpu: wgpu
+            name: macOS-arm64-quickjs-wgpu
+          # macOS ARM64 - V8 + wgpu
+          - os: macos-15
+            arch: arm64
+            js_engine: v8
+            webgpu: wgpu
+            name: macOS-arm64-v8-wgpu
+          # macOS ARM64 - JSC + wgpu
+          - os: macos-15
+            arch: arm64
+            js_engine: jsc
+            webgpu: wgpu
+            name: macOS-arm64-jsc-wgpu
+          # macOS ARM64 - QuickJS + Dawn
+          - os: macos-15
+            arch: arm64
+            js_engine: quickjs
+            webgpu: dawn
+            name: macOS-arm64-quickjs-dawn
+          # macOS ARM64 - V8 + Dawn
+          - os: macos-15
+            arch: arm64
+            js_engine: v8
+            webgpu: dawn
+            name: macOS-arm64-v8-dawn
+          # macOS ARM64 - JSC + Dawn
+          - os: macos-15
+            arch: arm64
+            js_engine: jsc
+            webgpu: dawn
+            name: macOS-arm64-jsc-dawn
+          # macOS x64 - JSC + Dawn only (x64 Mac is legacy)
+          - os: macos-15-intel
+            arch: x64
+            js_engine: jsc
+            webgpu: dawn
+            name: macOS-x64-jsc-dawn
+
+    name: Build - ${{ matrix.name }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        id: cache-deps
+        with:
+          path: third_party
+          key: deps-macos-${{ matrix.arch }}-${{ matrix.webgpu }}-${{ hashFiles('scripts/download-deps.mjs') }}
+
+      - name: Download base dependencies
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: node scripts/download-deps.mjs
+
+      - name: Download V8 (if needed)
+        if: matrix.js_engine == 'v8' && steps.cache-deps.outputs.cache-hit != 'true'
+        run: |
+          brew install p7zip || true
+          node scripts/download-deps.mjs --only v8
+
+      - name: Download Dawn (if needed)
+        if: matrix.webgpu == 'dawn' && steps.cache-deps.outputs.cache-hit != 'true'
+        run: node scripts/download-deps.mjs --only dawn
+
+      - name: Create SDL3 include symlink
+        run: |
+          if [ -d "third_party/sdl3/SDL3.xcframework" ]; then
+            mkdir -p third_party/sdl3/include
+            ln -sf ../SDL3.xcframework/macos-arm64_x86_64/SDL3.framework/Headers third_party/sdl3/include/SDL3
+          fi
+
+      - name: Configure CMake
+        run: |
+          CMAKE_ARGS="-B build -DCMAKE_BUILD_TYPE=Release"
+          # JS Engine
+          if [ "${{ matrix.js_engine }}" == "quickjs" ]; then
+            CMAKE_ARGS="$CMAKE_ARGS -DMYSTRAL_USE_QUICKJS=ON -DMYSTRAL_USE_V8=OFF -DMYSTRAL_USE_JSC=OFF"
+          elif [ "${{ matrix.js_engine }}" == "v8" ]; then
+            CMAKE_ARGS="$CMAKE_ARGS -DMYSTRAL_USE_QUICKJS=OFF -DMYSTRAL_USE_V8=ON -DMYSTRAL_USE_JSC=OFF"
+          elif [ "${{ matrix.js_engine }}" == "jsc" ]; then
+            CMAKE_ARGS="$CMAKE_ARGS -DMYSTRAL_USE_QUICKJS=OFF -DMYSTRAL_USE_V8=OFF -DMYSTRAL_USE_JSC=ON"
+          fi
+          # WebGPU backend
+          if [ "${{ matrix.webgpu }}" == "wgpu" ]; then
+            CMAKE_ARGS="$CMAKE_ARGS -DMYSTRAL_USE_WGPU=ON -DMYSTRAL_USE_DAWN=OFF"
+          elif [ "${{ matrix.webgpu }}" == "dawn" ]; then
+            CMAKE_ARGS="$CMAKE_ARGS -DMYSTRAL_USE_WGPU=OFF -DMYSTRAL_USE_DAWN=ON"
+          fi
+          echo "Running: cmake $CMAKE_ARGS"
+          cmake $CMAKE_ARGS
+
+      - name: Build
+        run: cmake --build build --config Release -j$(sysctl -n hw.ncpu)
+
+      - name: Test CLI
+        run: ./build/mystral --version
+
+      - name: Package artifacts
+        run: |
+          mkdir -p artifacts
+          cp build/mystral artifacts/
+          cp build/libmystral-runtime.a artifacts/ || true
+          # Include SDL3 framework for distribution
+          if [ -d "third_party/sdl3/SDL3.xcframework/macos-arm64_x86_64/SDL3.framework" ]; then
+            cp -R third_party/sdl3/SDL3.xcframework/macos-arm64_x86_64/SDL3.framework artifacts/
+          fi
+          cd artifacts && zip -r ../mystral-${{ matrix.name }}.zip .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mystral-${{ matrix.name }}
+          path: mystral-${{ matrix.name }}.zip
+
+  # =============================================================================
+  # Linux Builds
+  # =============================================================================
+  build-linux:
+    if: ${{ inputs.build_filter == 'all' || inputs.build_filter == 'linux-only' }}
+    # Use Ubuntu 24.04 to match pre-built Skia libraries
+    # Note: Pre-built Skia uses newer glibc symbols, so binaries require Ubuntu 24.04+
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x64 - QuickJS + wgpu (default)
+          - js_engine: quickjs
+            webgpu: wgpu
+            name: linux-x64-quickjs-wgpu
+          # Linux x64 - V8 + wgpu
+          - js_engine: v8
+            webgpu: wgpu
+            name: linux-x64-v8-wgpu
+          # Linux x64 - QuickJS + Dawn
+          - js_engine: quickjs
+            webgpu: dawn
+            name: linux-x64-quickjs-dawn
+          # Linux x64 - V8 + Dawn
+          - js_engine: v8
+            webgpu: dawn
+            name: linux-x64-v8-dawn
+
+    name: Build - ${{ matrix.name }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install system dependencies
+        run: |
+          # Remove Microsoft repos that sometimes return 403 on GitHub Actions runners
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake \
+            build-essential \
+            libx11-dev \
+            libxext-dev \
+            libxrandr-dev \
+            libxi-dev \
+            libxinerama-dev \
+            libxcursor-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            libegl-dev \
+            libgles-dev \
+            libcurl4-openssl-dev \
+            zlib1g-dev \
+            libfontconfig1-dev \
+            p7zip-full
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        id: cache-deps
+        with:
+          path: third_party
+          key: deps-linux-x64-${{ matrix.webgpu }}-v5-${{ hashFiles('scripts/download-deps.mjs') }}
+
+      - name: Download base dependencies
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: node scripts/download-deps.mjs
+
+      - name: Download V8 (if needed)
+        if: matrix.js_engine == 'v8' && steps.cache-deps.outputs.cache-hit != 'true'
+        run: node scripts/download-deps.mjs --only v8
+
+      - name: Download Dawn (if needed)
+        if: matrix.webgpu == 'dawn' && steps.cache-deps.outputs.cache-hit != 'true'
+        run: node scripts/download-deps.mjs --only dawn
+
+      - name: Build SDL3 from source
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: |
+          cd third_party/sdl3
+          SDL_DIR=$(ls -d SDL3-* 2>/dev/null | head -1)
+          if [ -n "$SDL_DIR" ]; then
+            cd "$SDL_DIR"
+            cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=../installed
+            cmake --build build -j$(nproc)
+            cmake --install build
+            cd ..
+            ln -sf installed/lib lib
+            ln -sf installed/include include
+          fi
+
+      - name: Configure CMake
+        run: |
+          CMAKE_ARGS="-B build -DCMAKE_BUILD_TYPE=Release"
+          # JS Engine
+          if [ "${{ matrix.js_engine }}" == "quickjs" ]; then
+            CMAKE_ARGS="$CMAKE_ARGS -DMYSTRAL_USE_QUICKJS=ON -DMYSTRAL_USE_V8=OFF -DMYSTRAL_USE_JSC=OFF"
+          elif [ "${{ matrix.js_engine }}" == "v8" ]; then
+            CMAKE_ARGS="$CMAKE_ARGS -DMYSTRAL_USE_QUICKJS=OFF -DMYSTRAL_USE_V8=ON -DMYSTRAL_USE_JSC=OFF"
+          fi
+          # WebGPU backend
+          if [ "${{ matrix.webgpu }}" == "wgpu" ]; then
+            CMAKE_ARGS="$CMAKE_ARGS -DMYSTRAL_USE_WGPU=ON -DMYSTRAL_USE_DAWN=OFF"
+          elif [ "${{ matrix.webgpu }}" == "dawn" ]; then
+            CMAKE_ARGS="$CMAKE_ARGS -DMYSTRAL_USE_WGPU=OFF -DMYSTRAL_USE_DAWN=ON"
+          fi
+          echo "Running: cmake $CMAKE_ARGS"
+          cmake $CMAKE_ARGS
+
+      - name: Build
+        run: cmake --build build --config Release -j$(nproc)
+
+      - name: Test CLI
+        run: ./build/mystral --version
+
+      - name: Package artifacts
+        run: |
+          mkdir -p artifacts
+          cp build/mystral artifacts/
+          cp build/libmystral-runtime.a artifacts/ || true
+          # Include SDL3 shared library
+          cp third_party/sdl3/installed/lib/libSDL3.so* artifacts/ || true
+          cd artifacts && zip -r ../mystral-${{ matrix.name }}.zip .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mystral-${{ matrix.name }}
+          path: mystral-${{ matrix.name }}.zip
+
+  # =============================================================================
+  # Windows Builds - wgpu
+  # =============================================================================
+  build-windows-wgpu:
+    if: ${{ inputs.build_filter == 'all' || inputs.build_filter == 'windows-only' }}
+    runs-on: windows-2022
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - js_engine: quickjs
+            name: windows-x64-quickjs-wgpu
+          - js_engine: v8
+            name: windows-x64-v8-wgpu
+
+    name: Build - ${{ matrix.name }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        id: cache-deps
+        with:
+          path: third_party
+          key: deps-windows-x64-wgpu-v10-${{ hashFiles('scripts/download-deps.mjs') }}
+
+      - name: Download base dependencies
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          export PATH="/c/Program Files/7-Zip:$PATH"
+          node scripts/download-deps.mjs
+
+      - name: Download V8 (if needed)
+        if: matrix.js_engine == 'v8' && steps.cache-deps.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          export PATH="/c/Program Files/7-Zip:$PATH"
+          node scripts/download-deps.mjs --only v8
+
+      - name: Install vcpkg dependencies
+        run: |
+          # Use static triplet for wgpu builds (/MT)
+          vcpkg install curl:x64-windows-static zlib:x64-windows-static
+          vcpkg integrate install
+
+      - name: Configure CMake
+        run: |
+          $CMAKE_ARGS = @("-B", "build", "-DCMAKE_BUILD_TYPE=Release")
+
+          # JS Engine
+          if ("${{ matrix.js_engine }}" -eq "quickjs") {
+            $CMAKE_ARGS += "-DMYSTRAL_USE_QUICKJS=ON", "-DMYSTRAL_USE_V8=OFF", "-DMYSTRAL_USE_JSC=OFF"
+          } elseif ("${{ matrix.js_engine }}" -eq "v8") {
+            $CMAKE_ARGS += "-DMYSTRAL_USE_QUICKJS=OFF", "-DMYSTRAL_USE_V8=ON", "-DMYSTRAL_USE_JSC=OFF"
+            # V8 requires C++20
+            $CMAKE_ARGS += "-DCMAKE_CXX_STANDARD=20"
+          }
+
+          # WebGPU backend - wgpu with static CRT (/MT)
+          $CMAKE_ARGS += "-DMYSTRAL_USE_WGPU=ON", "-DMYSTRAL_USE_DAWN=OFF"
+          $CMAKE_ARGS += "-DVCPKG_TARGET_TRIPLET=x64-windows-static"
+          $CMAKE_ARGS += "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"
+          $CMAKE_ARGS += "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+
+          Write-Host "Running: cmake $CMAKE_ARGS"
+          cmake @CMAKE_ARGS
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Test CLI
+        shell: bash
+        run: ./build/Release/mystral.exe --version || echo "Build complete"
+
+      - name: Package artifacts
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          cp build/Release/mystral.exe artifacts/ || cp build/mystral.exe artifacts/
+          cp build/Release/mystral-runtime.lib artifacts/ || cp build/mystral-runtime.lib artifacts/ || true
+          # Include SDL3 DLL
+          cp third_party/sdl3/bin/SDL3.dll artifacts/ || true
+          cd artifacts && 7z a ../mystral-${{ matrix.name }}.zip .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mystral-${{ matrix.name }}
+          path: mystral-${{ matrix.name }}.zip
+
+  # =============================================================================
+  # Windows Builds - Dawn (separate job for targeted testing)
+  # =============================================================================
+  build-windows-dawn:
+    if: ${{ inputs.build_filter == 'all' || inputs.build_filter == 'windows-only' || inputs.build_filter == 'windows-dawn-only' }}
+    runs-on: windows-2022
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - js_engine: quickjs
+            name: windows-x64-quickjs-dawn
+          - js_engine: v8
+            name: windows-x64-v8-dawn
+
+    name: Build - ${{ matrix.name }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        id: cache-deps
+        with:
+          path: third_party
+          key: deps-windows-x64-dawn-v13-${{ hashFiles('scripts/download-deps.mjs') }}
+
+      - name: Download base dependencies (excluding Skia/Dawn - use library-builder version)
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          export PATH="/c/Program Files/7-Zip:$PATH"
+          # Exclude skia and dawn - we'll use skia-win-static from library-builder instead
+          # which includes both Skia and Dawn with matching /MT static CRT
+          node scripts/download-deps.mjs --exclude skia,dawn
+
+      - name: Download V8 (if needed)
+        if: matrix.js_engine == 'v8' && steps.cache-deps.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          export PATH="/c/Program Files/7-Zip:$PATH"
+          node scripts/download-deps.mjs --only v8
+
+      - name: Download Skia with Dawn for Windows builds
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          export PATH="/c/Program Files/7-Zip:$PATH"
+          # Download Skia + Dawn from library-builder (includes dawn_combined.lib with D3D11/D3D12)
+          # This build uses /MT static CRT and has full WebGPU implementation
+          node scripts/download-deps.mjs --only skia-win-static
+
+      - name: Create WebGPU wrapper headers
+        # Always run this - wrapper headers are not in the cache, only downloaded deps
+        shell: bash
+        run: |
+          # library-builder Skia only has dawn/*.h headers, but code expects webgpu/*.h
+          # Create wrapper headers that include the dawn versions
+          INCLUDE_DIR="third_party/skia/build/include"
+          mkdir -p "$INCLUDE_DIR/webgpu"
+
+          # webgpu/webgpu.h -> dawn/webgpu.h
+          # Use angle brackets so it searches include paths (dawn/ is a sibling dir, not subdir)
+          printf '#ifndef INCLUDE_WEBGPU_WEBGPU_H_\n#define INCLUDE_WEBGPU_WEBGPU_H_\n#include <dawn/webgpu.h>\n#endif\n' > "$INCLUDE_DIR/webgpu/webgpu.h"
+
+          # webgpu/webgpu_cpp.h -> dawn/webgpu_cpp.h
+          printf '#ifndef INCLUDE_WEBGPU_WEBGPU_CPP_H_\n#define INCLUDE_WEBGPU_WEBGPU_CPP_H_\n#include <dawn/webgpu_cpp.h>\n#endif\n' > "$INCLUDE_DIR/webgpu/webgpu_cpp.h"
+
+          echo "Created WebGPU wrapper headers in $INCLUDE_DIR/webgpu/"
+          cat "$INCLUDE_DIR/webgpu/webgpu.h"
+          ls -la "$INCLUDE_DIR/webgpu/"
+
+      - name: Install vcpkg dependencies
+        run: |
+          # Use static triplet for all Windows builds (both wgpu and Dawn use /MT now)
+          vcpkg install curl:x64-windows-static zlib:x64-windows-static
+          vcpkg integrate install
+
+      - name: Configure CMake
+        run: |
+          $CMAKE_ARGS = @("-B", "build", "-DCMAKE_BUILD_TYPE=Release")
+
+          # JS Engine
+          if ("${{ matrix.js_engine }}" -eq "quickjs") {
+            $CMAKE_ARGS += "-DMYSTRAL_USE_QUICKJS=ON", "-DMYSTRAL_USE_V8=OFF", "-DMYSTRAL_USE_JSC=OFF"
+          } elseif ("${{ matrix.js_engine }}" -eq "v8") {
+            $CMAKE_ARGS += "-DMYSTRAL_USE_QUICKJS=OFF", "-DMYSTRAL_USE_V8=ON", "-DMYSTRAL_USE_JSC=OFF"
+            # V8 requires C++20
+            $CMAKE_ARGS += "-DCMAKE_CXX_STANDARD=20"
+          }
+
+          # WebGPU backend - Dawn with static CRT (/MT)
+          $CMAKE_ARGS += "-DMYSTRAL_USE_WGPU=OFF", "-DMYSTRAL_USE_DAWN=ON"
+          $CMAKE_ARGS += "-DVCPKG_TARGET_TRIPLET=x64-windows-static"
+          $CMAKE_ARGS += "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"
+          $CMAKE_ARGS += "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+
+          Write-Host "Running: cmake $CMAKE_ARGS"
+          cmake @CMAKE_ARGS
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Test CLI
+        shell: bash
+        run: ./build/Release/mystral.exe --version || echo "Build complete"
+
+      - name: Package artifacts
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          cp build/Release/mystral.exe artifacts/ || cp build/mystral.exe artifacts/
+          cp build/Release/mystral-runtime.lib artifacts/ || cp build/mystral-runtime.lib artifacts/ || true
+          # Include SDL3 DLL
+          cp third_party/sdl3/bin/SDL3.dll artifacts/ || true
+          cd artifacts && 7z a ../mystral-${{ matrix.name }}.zip .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mystral-${{ matrix.name }}
+          path: mystral-${{ matrix.name }}.zip
+
+  # =============================================================================
+  # Summary Job - Always runs to show all artifacts
+  # =============================================================================
+  summary:
+    name: Build Summary
+    runs-on: ubuntu-latest
+    needs: [build-macos, build-linux, build-windows-wgpu, build-windows-dawn]
+    if: always()
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List all artifacts
+        run: |
+          echo "## Build Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Platform | JS Engine | WebGPU | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-----------|--------|--------|" >> $GITHUB_STEP_SUMMARY
+
+          # Check each expected artifact
+          for config in \
+            "macOS-arm64-quickjs-wgpu" \
+            "macOS-arm64-v8-wgpu" \
+            "macOS-arm64-jsc-wgpu" \
+            "macOS-arm64-quickjs-dawn" \
+            "macOS-arm64-v8-dawn" \
+            "macOS-arm64-jsc-dawn" \
+            "macOS-x64-jsc-dawn" \
+            "linux-x64-quickjs-wgpu" \
+            "linux-x64-v8-wgpu" \
+            "linux-x64-quickjs-dawn" \
+            "linux-x64-v8-dawn" \
+            "windows-x64-quickjs-wgpu" \
+            "windows-x64-v8-wgpu" \
+            "windows-x64-quickjs-dawn" \
+            "windows-x64-v8-dawn"
+          do
+            # Parse config name
+            PLATFORM=$(echo $config | cut -d'-' -f1-2)
+            JS_ENGINE=$(echo $config | cut -d'-' -f3)
+            WEBGPU=$(echo $config | cut -d'-' -f4)
+
+            if [ -d "artifacts/mystral-$config" ]; then
+              echo "| $PLATFORM | $JS_ENGINE | $WEBGPU | :white_check_mark: |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "| $PLATFORM | $JS_ENGINE | $WEBGPU | :x: |" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Artifact Details" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ls -la artifacts/ 2>/dev/null || echo "No artifacts found"
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Report build status
+        run: |
+          TOTAL=$(ls -d artifacts/mystral-* 2>/dev/null | wc -l || echo 0)
+          EXPECTED=15
+          echo "Built $TOTAL of $EXPECTED configurations"
+          if [ "$TOTAL" -lt "$EXPECTED" ]; then
+            echo "::warning::Some builds failed. Check individual job logs for details."
+          fi

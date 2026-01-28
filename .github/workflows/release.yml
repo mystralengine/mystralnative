@@ -1,0 +1,523 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  # =============================================================================
+  # macOS Builds
+  # =============================================================================
+  build-macos:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS ARM64 - all configurations
+          - os: macos-15
+            arch: arm64
+            js_engine: quickjs
+            webgpu: wgpu
+            name: macOS-arm64-quickjs-wgpu
+          - os: macos-15
+            arch: arm64
+            js_engine: v8
+            webgpu: wgpu
+            name: macOS-arm64-v8-wgpu
+          - os: macos-15
+            arch: arm64
+            js_engine: jsc
+            webgpu: wgpu
+            name: macOS-arm64-jsc-wgpu
+          - os: macos-15
+            arch: arm64
+            js_engine: quickjs
+            webgpu: dawn
+            name: macOS-arm64-quickjs-dawn
+          - os: macos-15
+            arch: arm64
+            js_engine: v8
+            webgpu: dawn
+            name: macOS-arm64-v8-dawn
+          - os: macos-15
+            arch: arm64
+            js_engine: jsc
+            webgpu: dawn
+            name: macOS-arm64-jsc-dawn
+          # macOS x64 - JSC + Dawn only (legacy platform)
+          - os: macos-15-intel
+            arch: x64
+            js_engine: jsc
+            webgpu: dawn
+            name: macOS-x64-jsc-dawn
+
+    name: Build - ${{ matrix.name }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set version from tag
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "Setting version to $VERSION"
+          node scripts/set-version.mjs "$VERSION"
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        id: cache-deps
+        with:
+          path: third_party
+          key: deps-macos-${{ matrix.arch }}-${{ matrix.webgpu }}-${{ hashFiles('scripts/download-deps.mjs') }}
+
+      - name: Download base dependencies
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: node scripts/download-deps.mjs
+
+      - name: Download V8 (if needed)
+        if: matrix.js_engine == 'v8' && steps.cache-deps.outputs.cache-hit != 'true'
+        run: |
+          brew install p7zip || true
+          node scripts/download-deps.mjs --only v8
+
+      - name: Download Dawn (if needed)
+        if: matrix.webgpu == 'dawn' && steps.cache-deps.outputs.cache-hit != 'true'
+        run: node scripts/download-deps.mjs --only dawn
+
+      - name: Create SDL3 include symlink
+        run: |
+          if [ -d "third_party/sdl3/SDL3.xcframework" ]; then
+            mkdir -p third_party/sdl3/include
+            ln -sf ../SDL3.xcframework/macos-arm64_x86_64/SDL3.framework/Headers third_party/sdl3/include/SDL3
+          fi
+
+      - name: Configure CMake
+        run: |
+          CMAKE_ARGS="-B build -DCMAKE_BUILD_TYPE=Release"
+          if [ "${{ matrix.js_engine }}" == "quickjs" ]; then
+            CMAKE_ARGS="$CMAKE_ARGS -DMYSTRAL_USE_QUICKJS=ON -DMYSTRAL_USE_V8=OFF -DMYSTRAL_USE_JSC=OFF"
+          elif [ "${{ matrix.js_engine }}" == "v8" ]; then
+            CMAKE_ARGS="$CMAKE_ARGS -DMYSTRAL_USE_QUICKJS=OFF -DMYSTRAL_USE_V8=ON -DMYSTRAL_USE_JSC=OFF"
+          elif [ "${{ matrix.js_engine }}" == "jsc" ]; then
+            CMAKE_ARGS="$CMAKE_ARGS -DMYSTRAL_USE_QUICKJS=OFF -DMYSTRAL_USE_V8=OFF -DMYSTRAL_USE_JSC=ON"
+          fi
+          if [ "${{ matrix.webgpu }}" == "wgpu" ]; then
+            CMAKE_ARGS="$CMAKE_ARGS -DMYSTRAL_USE_WGPU=ON -DMYSTRAL_USE_DAWN=OFF"
+          elif [ "${{ matrix.webgpu }}" == "dawn" ]; then
+            CMAKE_ARGS="$CMAKE_ARGS -DMYSTRAL_USE_WGPU=OFF -DMYSTRAL_USE_DAWN=ON"
+          fi
+          cmake $CMAKE_ARGS
+
+      - name: Build
+        run: cmake --build build --config Release -j$(sysctl -n hw.ncpu)
+
+      - name: Test CLI
+        run: ./build/mystral --version
+
+      - name: Package artifacts
+        run: |
+          mkdir -p artifacts
+          cp build/mystral artifacts/
+          cp build/libmystral-runtime.a artifacts/ || true
+          if [ -d "third_party/sdl3/SDL3.xcframework/macos-arm64_x86_64/SDL3.framework" ]; then
+            cp -R third_party/sdl3/SDL3.xcframework/macos-arm64_x86_64/SDL3.framework artifacts/
+          fi
+          # Include examples for users to run immediately
+          mkdir -p artifacts/examples/assets
+          cp examples/*.js artifacts/examples/ || true
+          cp examples/assets/*.glb artifacts/examples/assets/ 2>/dev/null || true
+          cp examples/assets/*.gltf artifacts/examples/assets/ 2>/dev/null || true
+          cp examples/assets/*.hdr artifacts/examples/assets/ 2>/dev/null || true
+          cd artifacts && zip -r ../mystral-${{ matrix.name }}.zip .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mystral-${{ matrix.name }}
+          path: mystral-${{ matrix.name }}.zip
+
+  # =============================================================================
+  # Linux Builds
+  # =============================================================================
+  build-linux:
+    # Use Ubuntu 24.04 to match CI and prebuilt libuv dependencies (glibc 2.39)
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - js_engine: quickjs
+            webgpu: wgpu
+            name: linux-x64-quickjs-wgpu
+          - js_engine: v8
+            webgpu: wgpu
+            name: linux-x64-v8-wgpu
+          - js_engine: quickjs
+            webgpu: dawn
+            name: linux-x64-quickjs-dawn
+          - js_engine: v8
+            webgpu: dawn
+            name: linux-x64-v8-dawn
+
+    name: Build - ${{ matrix.name }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set version from tag
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "Setting version to $VERSION"
+          node scripts/set-version.mjs "$VERSION"
+
+      - name: Install system dependencies
+        run: |
+          # Remove Microsoft repos that sometimes return 403 on GitHub Actions runners
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake build-essential libx11-dev libxext-dev libxrandr-dev \
+            libxi-dev libxinerama-dev libxcursor-dev libwayland-dev \
+            libxkbcommon-dev libegl-dev libgles-dev libcurl4-openssl-dev \
+            zlib1g-dev libfontconfig1-dev p7zip-full
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        id: cache-deps
+        with:
+          path: third_party
+          key: deps-linux-x64-${{ matrix.webgpu }}-v5-${{ hashFiles('scripts/download-deps.mjs') }}
+
+      - name: Download base dependencies
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: node scripts/download-deps.mjs
+
+      - name: Download V8 (if needed)
+        if: matrix.js_engine == 'v8' && steps.cache-deps.outputs.cache-hit != 'true'
+        run: node scripts/download-deps.mjs --only v8
+
+      - name: Download Dawn (if needed)
+        if: matrix.webgpu == 'dawn' && steps.cache-deps.outputs.cache-hit != 'true'
+        run: node scripts/download-deps.mjs --only dawn
+
+      - name: Build SDL3 from source
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: |
+          cd third_party/sdl3
+          SDL_DIR=$(ls -d SDL3-* 2>/dev/null | head -1)
+          if [ -n "$SDL_DIR" ]; then
+            cd "$SDL_DIR"
+            cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=../installed
+            cmake --build build -j$(nproc)
+            cmake --install build
+            cd ..
+            ln -sf installed/lib lib
+            ln -sf installed/include include
+          fi
+
+      - name: Configure CMake
+        run: |
+          CMAKE_ARGS="-B build -DCMAKE_BUILD_TYPE=Release"
+          if [ "${{ matrix.js_engine }}" == "quickjs" ]; then
+            CMAKE_ARGS="$CMAKE_ARGS -DMYSTRAL_USE_QUICKJS=ON -DMYSTRAL_USE_V8=OFF -DMYSTRAL_USE_JSC=OFF"
+          elif [ "${{ matrix.js_engine }}" == "v8" ]; then
+            CMAKE_ARGS="$CMAKE_ARGS -DMYSTRAL_USE_QUICKJS=OFF -DMYSTRAL_USE_V8=ON -DMYSTRAL_USE_JSC=OFF"
+          fi
+          if [ "${{ matrix.webgpu }}" == "wgpu" ]; then
+            CMAKE_ARGS="$CMAKE_ARGS -DMYSTRAL_USE_WGPU=ON -DMYSTRAL_USE_DAWN=OFF"
+          elif [ "${{ matrix.webgpu }}" == "dawn" ]; then
+            CMAKE_ARGS="$CMAKE_ARGS -DMYSTRAL_USE_WGPU=OFF -DMYSTRAL_USE_DAWN=ON"
+          fi
+          cmake $CMAKE_ARGS
+
+      - name: Build
+        run: cmake --build build --config Release -j$(nproc)
+
+      - name: Test CLI
+        run: ./build/mystral --version
+
+      - name: Package artifacts
+        run: |
+          mkdir -p artifacts
+          cp build/mystral artifacts/
+          cp build/libmystral-runtime.a artifacts/ || true
+          cp third_party/sdl3/installed/lib/libSDL3.so* artifacts/ || true
+          # Include examples for users to run immediately
+          mkdir -p artifacts/examples/assets
+          cp examples/*.js artifacts/examples/ || true
+          cp examples/assets/*.glb artifacts/examples/assets/ 2>/dev/null || true
+          cp examples/assets/*.gltf artifacts/examples/assets/ 2>/dev/null || true
+          cp examples/assets/*.hdr artifacts/examples/assets/ 2>/dev/null || true
+          cd artifacts && zip -r ../mystral-${{ matrix.name }}.zip .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mystral-${{ matrix.name }}
+          path: mystral-${{ matrix.name }}.zip
+
+  # =============================================================================
+  # Windows Builds
+  # =============================================================================
+  build-windows:
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - js_engine: quickjs
+            webgpu: wgpu
+            name: windows-x64-quickjs-wgpu
+          - js_engine: v8
+            webgpu: wgpu
+            name: windows-x64-v8-wgpu
+          - js_engine: quickjs
+            webgpu: dawn
+            name: windows-x64-quickjs-dawn
+          - js_engine: v8
+            webgpu: dawn
+            name: windows-x64-v8-dawn
+
+    name: Build - ${{ matrix.name }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set version from tag
+        shell: bash
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "Setting version to $VERSION"
+          node scripts/set-version.mjs "$VERSION"
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        id: cache-deps
+        with:
+          path: third_party
+          key: deps-windows-x64-${{ matrix.webgpu }}-v9-${{ hashFiles('scripts/download-deps.mjs') }}
+
+      - name: Download base dependencies
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          export PATH="/c/Program Files/7-Zip:$PATH"
+          node scripts/download-deps.mjs
+
+      - name: Download V8 (if needed)
+        if: matrix.js_engine == 'v8' && steps.cache-deps.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          export PATH="/c/Program Files/7-Zip:$PATH"
+          node scripts/download-deps.mjs --only v8
+
+      - name: Download Dawn (if needed)
+        if: matrix.webgpu == 'dawn' && steps.cache-deps.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          export PATH="/c/Program Files/7-Zip:$PATH"
+          # Download official Dawn release (has webgpu_dawn.lib with actual implementation)
+          node scripts/download-deps.mjs --only dawn
+          # Also get Skia static for /MT CRT compatibility
+          node scripts/download-deps.mjs --only skia-win-static
+
+      - name: Install vcpkg dependencies
+        run: |
+          # Both wgpu and dawn builds use static CRT (/MT) to match Skia
+          vcpkg install curl:x64-windows-static zlib:x64-windows-static
+          vcpkg integrate install
+
+      - name: Configure CMake
+        run: |
+          $CMAKE_ARGS = @("-B", "build", "-DCMAKE_BUILD_TYPE=Release")
+          if ("${{ matrix.js_engine }}" -eq "quickjs") {
+            $CMAKE_ARGS += "-DMYSTRAL_USE_QUICKJS=ON", "-DMYSTRAL_USE_V8=OFF", "-DMYSTRAL_USE_JSC=OFF"
+          } elseif ("${{ matrix.js_engine }}" -eq "v8") {
+            $CMAKE_ARGS += "-DMYSTRAL_USE_QUICKJS=OFF", "-DMYSTRAL_USE_V8=ON", "-DMYSTRAL_USE_JSC=OFF"
+          }
+          if ("${{ matrix.webgpu }}" -eq "wgpu") {
+            $CMAKE_ARGS += "-DMYSTRAL_USE_WGPU=ON", "-DMYSTRAL_USE_DAWN=OFF"
+          } elseif ("${{ matrix.webgpu }}" -eq "dawn") {
+            $CMAKE_ARGS += "-DMYSTRAL_USE_WGPU=OFF", "-DMYSTRAL_USE_DAWN=ON"
+          }
+          # Use static CRT (/MT) to match Skia prebuilt libraries
+          $CMAKE_ARGS += "-DVCPKG_TARGET_TRIPLET=x64-windows-static"
+          $CMAKE_ARGS += "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"
+          $CMAKE_ARGS += "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          cmake @CMAKE_ARGS
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Test CLI
+        shell: bash
+        run: ./build/Release/mystral.exe --version || echo "Build complete"
+
+      - name: Package artifacts
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          cp build/Release/mystral.exe artifacts/ || cp build/mystral.exe artifacts/
+          cp build/Release/mystral-runtime.lib artifacts/ || cp build/mystral-runtime.lib artifacts/ || true
+          cp third_party/sdl3/bin/SDL3.dll artifacts/ || true
+          # Include examples for users to run immediately
+          mkdir -p artifacts/examples/assets
+          cp examples/*.js artifacts/examples/ || true
+          cp examples/assets/*.glb artifacts/examples/assets/ 2>/dev/null || true
+          cp examples/assets/*.gltf artifacts/examples/assets/ 2>/dev/null || true
+          cp examples/assets/*.hdr artifacts/examples/assets/ 2>/dev/null || true
+          cd artifacts && 7z a ../mystral-${{ matrix.name }}.zip .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mystral-${{ matrix.name }}
+          path: mystral-${{ matrix.name }}.zip
+
+  # =============================================================================
+  # Create Release
+  # =============================================================================
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [build-macos, build-linux, build-windows]
+    if: always()
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Get tag name
+        id: tag
+        run: echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Commit version from tag to source files
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "Updating source files to version $VERSION"
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          # Checkout main so we can commit and push to it
+          git checkout main
+          node scripts/set-version.mjs "$VERSION"
+          git add package.json CMakeLists.txt include/mystral/runtime.h
+          git diff --cached --quiet || {
+            git commit -m "Bump version to $VERSION"
+            git push origin main
+          }
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release
+          for dir in artifacts/mystral-*/; do
+            name=$(basename "$dir")
+            if [ -f "$dir/$name.zip" ]; then
+              cp "$dir/$name.zip" release/
+            fi
+          done
+          ls -la release/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: MystralNative ${{ steps.tag.outputs.tag }}
+          draft: false
+          prerelease: ${{ contains(steps.tag.outputs.tag, 'alpha') || contains(steps.tag.outputs.tag, 'beta') || contains(steps.tag.outputs.tag, 'rc') }}
+          body: |
+            ## MystralNative ${{ steps.tag.outputs.tag }}
+
+            A lightweight, cross-platform runtime for JavaScript games using WebGPU.
+
+            ### Downloads
+
+            **macOS (Apple Silicon - ARM64):**
+            | JS Engine | WebGPU Backend | Download |
+            |-----------|----------------|----------|
+            | QuickJS | wgpu | `mystral-macOS-arm64-quickjs-wgpu.zip` |
+            | V8 | wgpu | `mystral-macOS-arm64-v8-wgpu.zip` |
+            | JSC | wgpu | `mystral-macOS-arm64-jsc-wgpu.zip` |
+            | QuickJS | Dawn | `mystral-macOS-arm64-quickjs-dawn.zip` |
+            | V8 | Dawn | `mystral-macOS-arm64-v8-dawn.zip` |
+            | JSC | Dawn | `mystral-macOS-arm64-jsc-dawn.zip` |
+
+            **macOS (Intel - x64):**
+            | JS Engine | WebGPU Backend | Download |
+            |-----------|----------------|----------|
+            | JSC | Dawn | `mystral-macOS-x64-jsc-dawn.zip` |
+
+            **Linux (x64):**
+            | JS Engine | WebGPU Backend | Download |
+            |-----------|----------------|----------|
+            | QuickJS | wgpu | `mystral-linux-x64-quickjs-wgpu.zip` |
+            | V8 | wgpu | `mystral-linux-x64-v8-wgpu.zip` |
+            | QuickJS | Dawn | `mystral-linux-x64-quickjs-dawn.zip` |
+            | V8 | Dawn | `mystral-linux-x64-v8-dawn.zip` |
+
+            **Windows (x64):**
+            | JS Engine | WebGPU Backend | Download |
+            |-----------|----------------|----------|
+            | QuickJS | wgpu | `mystral-windows-x64-quickjs-wgpu.zip` |
+            | V8 | wgpu | `mystral-windows-x64-v8-wgpu.zip` |
+            | QuickJS | Dawn | `mystral-windows-x64-quickjs-dawn.zip` |
+            | V8 | Dawn | `mystral-windows-x64-v8-dawn.zip` |
+
+            ### Recommended Configurations
+
+            - **macOS**: `jsc-wgpu` (uses system JavaScriptCore, best performance)
+            - **Linux**: `quickjs-wgpu` (smallest binary, good performance)
+            - **Windows**: `v8-wgpu` (best JS performance)
+
+            ### Quick Start
+
+            ```bash
+            # Extract and run
+            unzip mystral-<platform>.zip
+            ./mystral run your-game.js
+            ```
+
+            See [README](https://github.com/mystralengine/mystralnative#readme) for full documentation.
+          files: |
+            artifacts/mystral-*/mystral-*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summary
+        run: |
+          echo "## Release Created" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Tag: ${{ steps.tag.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Artifacts" >> $GITHUB_STEP_SUMMARY
+          ls -la artifacts/mystral-*/ >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "No artifacts" >> $GITHUB_STEP_SUMMARY

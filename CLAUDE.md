@@ -121,7 +121,7 @@ The script automatically:
 
 ## Releases
 
-Releases are managed via GitHub Actions workflows in the **public** repo (`mystralengine/mystralnative`). The `.github/` directory is maintained separately in the public repo (not synced from private).
+Releases are managed via GitHub Actions workflows. The `.github/` directory is synced from `internal_packages/mystralnative/.github/` to the public repo `mystralengine/mystralnative`. Edit workflows here and sync them.
 
 ### MystralNative Release (all platforms)
 
@@ -163,9 +163,8 @@ Manual dispatch is also available via Actions > Sponza Demo Build > Run workflow
 ### Release Checklist
 
 1. Sync latest changes from private repo to public repo (see Repository Sync below)
-2. Commit any public-repo-only changes (e.g., `.github/workflows/`)
-3. Push tags to trigger release workflows
-4. Verify the GitHub Actions run succeeds and artifacts are published
+2. Push tags to the public repo to trigger release workflows
+3. Verify the GitHub Actions run succeeds and artifacts are published
 
 ## Repository Sync
 
