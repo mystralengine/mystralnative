@@ -1,0 +1,139 @@
+name: Intel Mac Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_rendering:
+        description: 'Run rendering test (rotating-cube for 5 seconds)'
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  build-and-test-intel:
+    runs-on: macos-15-intel
+    timeout-minutes: 20
+    name: Build and Test - macOS Intel (x64)
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System Info
+        run: |
+          echo "=== macOS Version ==="
+          sw_vers
+          echo ""
+          echo "=== Hardware ==="
+          system_profiler SPHardwareDataType
+          echo ""
+          echo "=== CPU ==="
+          sysctl -n machdep.cpu.brand_string
+          echo ""
+          echo "=== Metal Support ==="
+          system_profiler SPDisplaysDataType | grep -i metal || echo "No Metal info found"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        id: cache-deps
+        with:
+          path: third_party
+          key: deps-macos-x64-dawn-v1-${{ hashFiles('scripts/download-deps.mjs') }}
+
+      - name: Download base dependencies
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: node scripts/download-deps.mjs
+
+      - name: Download Dawn
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: node scripts/download-deps.mjs --only dawn
+
+      - name: Create SDL3 include symlink
+        run: |
+          if [ -d "third_party/sdl3/SDL3.xcframework" ]; then
+            mkdir -p third_party/sdl3/include
+            ln -sf ../SDL3.xcframework/macos-arm64_x86_64/SDL3.framework/Headers third_party/sdl3/include/SDL3
+          fi
+
+      - name: Check Dawn library symbols
+        run: |
+          echo "=== Checking Dawn library for MTLLogStateDescriptor ==="
+          DAWN_LIB=$(find third_party -name "libdawn*.a" -o -name "dawn_combined.a" 2>/dev/null | head -1)
+          if [ -n "$DAWN_LIB" ]; then
+            echo "Found Dawn library: $DAWN_LIB"
+            echo ""
+            echo "=== Searching for MTLLogState symbols ==="
+            nm "$DAWN_LIB" 2>/dev/null | grep -i "MTLLogState" || echo "No MTLLogState symbols found in Dawn library"
+            echo ""
+            echo "=== Checking undefined symbols that reference Metal ==="
+            nm -u "$DAWN_LIB" 2>/dev/null | grep -i "MTL" | head -20 || echo "No undefined MTL symbols"
+          else
+            echo "Dawn library not found"
+          fi
+
+      - name: Configure CMake
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+            -DMYSTRAL_USE_QUICKJS=OFF \
+            -DMYSTRAL_USE_V8=OFF \
+            -DMYSTRAL_USE_JSC=ON \
+            -DMYSTRAL_USE_WGPU=OFF \
+            -DMYSTRAL_USE_DAWN=ON
+
+      - name: Build
+        run: cmake --build build --config Release -j$(sysctl -n hw.ncpu)
+
+      - name: Check binary symbols
+        run: |
+          echo "=== Checking mystral binary for MTLLogStateDescriptor ==="
+          nm build/mystral 2>/dev/null | grep -i "MTLLogState" || echo "No MTLLogState symbols found in binary"
+          echo ""
+          echo "=== Binary info ==="
+          file build/mystral
+          echo ""
+          echo "=== Linked frameworks ==="
+          otool -L build/mystral | grep -i metal || echo "Metal framework linking info"
+
+      - name: Test CLI --version
+        run: ./build/mystral --version
+
+      - name: Test rotating-cube (5 second timeout)
+        if: ${{ inputs.test_rendering }}
+        run: |
+          echo "=== Running rotating-cube.js with 5 second timeout ==="
+          # Run with timeout - the example runs indefinitely so we kill it after 5 seconds
+          # If it crashes immediately with symbol errors, the timeout won't save it
+          timeout 5 ./build/mystral run ./examples/rotating-cube.js 2>&1 || {
+            EXIT_CODE=$?
+            if [ $EXIT_CODE -eq 124 ]; then
+              echo "Test passed - example ran for 5 seconds without crashing"
+            elif [ $EXIT_CODE -eq 134 ]; then
+              echo "ERROR: Aborted (SIGABRT) - likely symbol not found error"
+              exit 1
+            else
+              echo "ERROR: Example exited with code $EXIT_CODE"
+              exit 1
+            fi
+          }
+
+      - name: Package artifacts
+        run: |
+          mkdir -p artifacts
+          cp build/mystral artifacts/
+          cp build/libmystral-runtime.a artifacts/ || true
+          if [ -d "third_party/sdl3/SDL3.xcframework/macos-arm64_x86_64/SDL3.framework" ]; then
+            cp -R third_party/sdl3/SDL3.xcframework/macos-arm64_x86_64/SDL3.framework artifacts/
+          fi
+          # Include examples for testing
+          cp -r examples artifacts/
+          cd artifacts && zip -r ../mystral-macOS-x64-jsc-dawn-test.zip .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mystral-macOS-x64-jsc-dawn-test
+          path: mystral-macOS-x64-jsc-dawn-test.zip
