@@ -1137,6 +1137,13 @@ if(NOT MYSTRAL_PLATFORM STREQUAL "ios" AND NOT MYSTRAL_PLATFORM STREQUAL "androi
         target_compile_definitions(mystral PRIVATE MYSTRAL_HAS_WEBP_MUX)
     endif()
 
+    # Add SDL3 include directories for input injection
+    if(TARGET SDL3::SDL3 OR TARGET SDL3::SDL3-static)
+        target_link_libraries(mystral PRIVATE $<IF:$<TARGET_EXISTS:SDL3::SDL3-static>,SDL3::SDL3-static,SDL3::SDL3>)
+    elseif(SDL3_INCLUDE_DIR)
+        target_include_directories(mystral PRIVATE ${SDL3_INCLUDE_DIR})
+    endif()
+
     # macOS: Set rpath for redistributable binary
     # The binary will look for SDL3.framework next to the executable
     if(APPLE)

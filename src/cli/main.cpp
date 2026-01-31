@@ -37,6 +37,243 @@
 #include <webp/mux.h>
 #endif
 
+// stb_image_write for PNG encoding (implementation is in stb_impl.cpp)
+typedef void (*stbi_write_func)(void *context, void *data, int size);
+extern "C" int stbi_write_png_to_func(stbi_write_func func, void *context, int w, int h, int comp, const void *data, int stride_in_bytes);
+
+// SDL3 for input injection
+#include <SDL3/SDL.h>
+
+// Base64 encoding for screenshot data
+static std::string base64Encode(const uint8_t* data, size_t len) {
+    static const char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string result;
+    result.reserve((len + 2) / 3 * 4);
+
+    for (size_t i = 0; i < len; i += 3) {
+        uint32_t n = static_cast<uint32_t>(data[i]) << 16;
+        if (i + 1 < len) n |= static_cast<uint32_t>(data[i + 1]) << 8;
+        if (i + 2 < len) n |= data[i + 2];
+
+        result += alphabet[(n >> 18) & 0x3F];
+        result += alphabet[(n >> 12) & 0x3F];
+        result += (i + 1 < len) ? alphabet[(n >> 6) & 0x3F] : '=';
+        result += (i + 2 < len) ? alphabet[n & 0x3F] : '=';
+    }
+    return result;
+}
+
+// PNG write callback for stbi_write_png_to_func
+static void pngWriteCallback(void* context, void* data, int size) {
+    auto* buffer = static_cast<std::vector<uint8_t>*>(context);
+    const uint8_t* bytes = static_cast<const uint8_t*>(data);
+    buffer->insert(buffer->end(), bytes, bytes + size);
+}
+
+// ============================================================================
+// SDL Input Injection for Debug Server
+// ============================================================================
+
+/**
+ * Map key name to SDL scancode
+ * Supports both Playwright-style names (Enter, Space) and DOM KeyboardEvent.code values
+ */
+static SDL_Scancode keyNameToScancode(const std::string& key) {
+    // Letters
+    if (key == "KeyA" || key == "a" || key == "A") return SDL_SCANCODE_A;
+    if (key == "KeyB" || key == "b" || key == "B") return SDL_SCANCODE_B;
+    if (key == "KeyC" || key == "c" || key == "C") return SDL_SCANCODE_C;
+    if (key == "KeyD" || key == "d" || key == "D") return SDL_SCANCODE_D;
+    if (key == "KeyE" || key == "e" || key == "E") return SDL_SCANCODE_E;
+    if (key == "KeyF" || key == "f" || key == "F") return SDL_SCANCODE_F;
+    if (key == "KeyG" || key == "g" || key == "G") return SDL_SCANCODE_G;
+    if (key == "KeyH" || key == "h" || key == "H") return SDL_SCANCODE_H;
+    if (key == "KeyI" || key == "i" || key == "I") return SDL_SCANCODE_I;
+    if (key == "KeyJ" || key == "j" || key == "J") return SDL_SCANCODE_J;
+    if (key == "KeyK" || key == "k" || key == "K") return SDL_SCANCODE_K;
+    if (key == "KeyL" || key == "l" || key == "L") return SDL_SCANCODE_L;
+    if (key == "KeyM" || key == "m" || key == "M") return SDL_SCANCODE_M;
+    if (key == "KeyN" || key == "n" || key == "N") return SDL_SCANCODE_N;
+    if (key == "KeyO" || key == "o" || key == "O") return SDL_SCANCODE_O;
+    if (key == "KeyP" || key == "p" || key == "P") return SDL_SCANCODE_P;
+    if (key == "KeyQ" || key == "q" || key == "Q") return SDL_SCANCODE_Q;
+    if (key == "KeyR" || key == "r" || key == "R") return SDL_SCANCODE_R;
+    if (key == "KeyS" || key == "s" || key == "S") return SDL_SCANCODE_S;
+    if (key == "KeyT" || key == "t" || key == "T") return SDL_SCANCODE_T;
+    if (key == "KeyU" || key == "u" || key == "U") return SDL_SCANCODE_U;
+    if (key == "KeyV" || key == "v" || key == "V") return SDL_SCANCODE_V;
+    if (key == "KeyW" || key == "w" || key == "W") return SDL_SCANCODE_W;
+    if (key == "KeyX" || key == "x" || key == "X") return SDL_SCANCODE_X;
+    if (key == "KeyY" || key == "y" || key == "Y") return SDL_SCANCODE_Y;
+    if (key == "KeyZ" || key == "z" || key == "Z") return SDL_SCANCODE_Z;
+
+    // Numbers
+    if (key == "Digit0" || key == "0") return SDL_SCANCODE_0;
+    if (key == "Digit1" || key == "1") return SDL_SCANCODE_1;
+    if (key == "Digit2" || key == "2") return SDL_SCANCODE_2;
+    if (key == "Digit3" || key == "3") return SDL_SCANCODE_3;
+    if (key == "Digit4" || key == "4") return SDL_SCANCODE_4;
+    if (key == "Digit5" || key == "5") return SDL_SCANCODE_5;
+    if (key == "Digit6" || key == "6") return SDL_SCANCODE_6;
+    if (key == "Digit7" || key == "7") return SDL_SCANCODE_7;
+    if (key == "Digit8" || key == "8") return SDL_SCANCODE_8;
+    if (key == "Digit9" || key == "9") return SDL_SCANCODE_9;
+
+    // Function keys
+    if (key == "F1") return SDL_SCANCODE_F1;
+    if (key == "F2") return SDL_SCANCODE_F2;
+    if (key == "F3") return SDL_SCANCODE_F3;
+    if (key == "F4") return SDL_SCANCODE_F4;
+    if (key == "F5") return SDL_SCANCODE_F5;
+    if (key == "F6") return SDL_SCANCODE_F6;
+    if (key == "F7") return SDL_SCANCODE_F7;
+    if (key == "F8") return SDL_SCANCODE_F8;
+    if (key == "F9") return SDL_SCANCODE_F9;
+    if (key == "F10") return SDL_SCANCODE_F10;
+    if (key == "F11") return SDL_SCANCODE_F11;
+    if (key == "F12") return SDL_SCANCODE_F12;
+
+    // Navigation
+    if (key == "ArrowUp" || key == "Up") return SDL_SCANCODE_UP;
+    if (key == "ArrowDown" || key == "Down") return SDL_SCANCODE_DOWN;
+    if (key == "ArrowLeft" || key == "Left") return SDL_SCANCODE_LEFT;
+    if (key == "ArrowRight" || key == "Right") return SDL_SCANCODE_RIGHT;
+    if (key == "Home") return SDL_SCANCODE_HOME;
+    if (key == "End") return SDL_SCANCODE_END;
+    if (key == "PageUp") return SDL_SCANCODE_PAGEUP;
+    if (key == "PageDown") return SDL_SCANCODE_PAGEDOWN;
+
+    // Editing
+    if (key == "Backspace") return SDL_SCANCODE_BACKSPACE;
+    if (key == "Delete") return SDL_SCANCODE_DELETE;
+    if (key == "Insert") return SDL_SCANCODE_INSERT;
+    if (key == "Enter" || key == "Return") return SDL_SCANCODE_RETURN;
+    if (key == "Tab") return SDL_SCANCODE_TAB;
+    if (key == "Escape" || key == "Esc") return SDL_SCANCODE_ESCAPE;
+    if (key == "Space" || key == " ") return SDL_SCANCODE_SPACE;
+
+    // Modifiers
+    if (key == "ShiftLeft" || key == "Shift") return SDL_SCANCODE_LSHIFT;
+    if (key == "ShiftRight") return SDL_SCANCODE_RSHIFT;
+    if (key == "ControlLeft" || key == "Control" || key == "Ctrl") return SDL_SCANCODE_LCTRL;
+    if (key == "ControlRight") return SDL_SCANCODE_RCTRL;
+    if (key == "AltLeft" || key == "Alt") return SDL_SCANCODE_LALT;
+    if (key == "AltRight") return SDL_SCANCODE_RALT;
+    if (key == "MetaLeft" || key == "Meta" || key == "Command" || key == "Win") return SDL_SCANCODE_LGUI;
+    if (key == "MetaRight") return SDL_SCANCODE_RGUI;
+    if (key == "CapsLock") return SDL_SCANCODE_CAPSLOCK;
+
+    // Punctuation
+    if (key == "Minus" || key == "-") return SDL_SCANCODE_MINUS;
+    if (key == "Equal" || key == "=" || key == "Plus") return SDL_SCANCODE_EQUALS;
+    if (key == "BracketLeft" || key == "[") return SDL_SCANCODE_LEFTBRACKET;
+    if (key == "BracketRight" || key == "]") return SDL_SCANCODE_RIGHTBRACKET;
+    if (key == "Backslash" || key == "\\") return SDL_SCANCODE_BACKSLASH;
+    if (key == "Semicolon" || key == ";") return SDL_SCANCODE_SEMICOLON;
+    if (key == "Quote" || key == "'") return SDL_SCANCODE_APOSTROPHE;
+    if (key == "Backquote" || key == "`") return SDL_SCANCODE_GRAVE;
+    if (key == "Comma" || key == ",") return SDL_SCANCODE_COMMA;
+    if (key == "Period" || key == ".") return SDL_SCANCODE_PERIOD;
+    if (key == "Slash" || key == "/") return SDL_SCANCODE_SLASH;
+
+    return SDL_SCANCODE_UNKNOWN;
+}
+
+/**
+ * Inject a keyboard event into SDL's event queue
+ */
+static bool injectKeyboardEvent(SDL_Scancode scancode, bool down) {
+    if (scancode == SDL_SCANCODE_UNKNOWN) return false;
+
+    SDL_Event event;
+    SDL_zero(event);
+    event.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+    event.key.scancode = scancode;
+    event.key.key = SDL_GetKeyFromScancode(scancode, SDL_KMOD_NONE, false);
+    event.key.down = down;
+    event.key.repeat = false;
+
+    return SDL_PushEvent(&event) > 0;
+}
+
+/**
+ * Inject a mouse motion event
+ */
+static bool injectMouseMotion(float x, float y) {
+    SDL_Event event;
+    SDL_zero(event);
+    event.type = SDL_EVENT_MOUSE_MOTION;
+    event.motion.x = x;
+    event.motion.y = y;
+    event.motion.xrel = 0;
+    event.motion.yrel = 0;
+
+    return SDL_PushEvent(&event) > 0;
+}
+
+/**
+ * Inject a mouse button event
+ */
+static bool injectMouseButton(float x, float y, int button, bool down) {
+    SDL_Event event;
+    SDL_zero(event);
+    event.type = down ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
+    event.button.button = button;
+    event.button.down = down;
+    event.button.x = x;
+    event.button.y = y;
+    event.button.clicks = 1;
+
+    return SDL_PushEvent(&event) > 0;
+}
+
+/**
+ * Parse JSON to extract a string value for a key
+ */
+static std::string extractJsonString(const std::string& json, const std::string& key) {
+    std::string searchKey = "\"" + key + "\"";
+    size_t keyPos = json.find(searchKey);
+    if (keyPos == std::string::npos) return "";
+
+    size_t colonPos = json.find(':', keyPos);
+    if (colonPos == std::string::npos) return "";
+
+    size_t quoteStart = json.find('"', colonPos);
+    if (quoteStart == std::string::npos) return "";
+
+    size_t quoteEnd = json.find('"', quoteStart + 1);
+    if (quoteEnd == std::string::npos) return "";
+
+    return json.substr(quoteStart + 1, quoteEnd - quoteStart - 1);
+}
+
+/**
+ * Parse JSON to extract a number value for a key
+ */
+static double extractJsonNumber(const std::string& json, const std::string& key, double defaultValue = 0) {
+    std::string searchKey = "\"" + key + "\"";
+    size_t keyPos = json.find(searchKey);
+    if (keyPos == std::string::npos) return defaultValue;
+
+    size_t colonPos = json.find(':', keyPos);
+    if (colonPos == std::string::npos) return defaultValue;
+
+    size_t start = colonPos + 1;
+    while (start < json.size() && (json[start] == ' ' || json[start] == '\t')) start++;
+
+    size_t end = start;
+    while (end < json.size() && (json[end] == '-' || json[end] == '.' || (json[end] >= '0' && json[end] <= '9'))) end++;
+
+    if (end > start) {
+        try {
+            return std::stod(json.substr(start, end - start));
+        } catch (...) {
+            return defaultValue;
+        }
+    }
+    return defaultValue;
+}
+
 // Platform-specific headers for process termination
 #ifdef _WIN32
 #include <process.h>  // Windows: _exit()
@@ -1238,24 +1475,167 @@ int runScript(const CLIOptions& opts) {
                         std::vector<uint8_t> frameData;
                         uint32_t width, height;
                         if (runtime->captureFrame(frameData, width, height)) {
-                            // Encode to PNG and return as base64
-                            // For now, return dimensions - full implementation would encode PNG
-                            return "{\"width\":" + std::to_string(width) + ",\"height\":" + std::to_string(height) + ",\"format\":\"rgba\",\"size\":" + std::to_string(frameData.size()) + "}";
+                            // Encode to PNG
+                            std::vector<uint8_t> pngData;
+                            if (stbi_write_png_to_func(pngWriteCallback, &pngData, width, height, 4, frameData.data(), width * 4)) {
+                                // Base64 encode
+                                std::string base64 = base64Encode(pngData.data(), pngData.size());
+                                return "{\"data\":\"" + base64 + "\",\"width\":" + std::to_string(width) + ",\"height\":" + std::to_string(height) + "}";
+                            }
+                            return "{\"error\":\"Failed to encode PNG\"}";
                         }
                         return "{\"error\":\"Failed to capture frame\"}";
                     }
 
-                    // Handle keyboard.press, keyboard.down, keyboard.up
+                    // Handle keyboard.press, keyboard.down, keyboard.up, keyboard.type
                     if (method.rfind("keyboard.", 0) == 0) {
-                        // Parse key from params
-                        // For now, return success - full implementation would inject SDL events
-                        return "{}";
+                        std::string subMethod = method.substr(9); // After "keyboard."
+                        std::string keyName = extractJsonString(params, "key");
+
+                        if (subMethod == "press") {
+                            SDL_Scancode scancode = keyNameToScancode(keyName);
+                            if (scancode == SDL_SCANCODE_UNKNOWN) {
+                                return "{\"error\":\"Unknown key: " + keyName + "\"}";
+                            }
+                            injectKeyboardEvent(scancode, true);
+                            injectKeyboardEvent(scancode, false);
+                            return "{}";
+                        }
+                        if (subMethod == "down") {
+                            SDL_Scancode scancode = keyNameToScancode(keyName);
+                            if (scancode == SDL_SCANCODE_UNKNOWN) {
+                                return "{\"error\":\"Unknown key: " + keyName + "\"}";
+                            }
+                            injectKeyboardEvent(scancode, true);
+                            return "{}";
+                        }
+                        if (subMethod == "up") {
+                            SDL_Scancode scancode = keyNameToScancode(keyName);
+                            if (scancode == SDL_SCANCODE_UNKNOWN) {
+                                return "{\"error\":\"Unknown key: " + keyName + "\"}";
+                            }
+                            injectKeyboardEvent(scancode, false);
+                            return "{}";
+                        }
+                        if (subMethod == "type") {
+                            std::string text = extractJsonString(params, "text");
+                            for (char c : text) {
+                                std::string keyStr(1, c);
+                                SDL_Scancode scancode = keyNameToScancode(keyStr);
+                                if (scancode != SDL_SCANCODE_UNKNOWN) {
+                                    injectKeyboardEvent(scancode, true);
+                                    injectKeyboardEvent(scancode, false);
+                                }
+                            }
+                            return "{}";
+                        }
+                        return "{\"error\":\"Unknown keyboard method: " + subMethod + "\"}";
                     }
 
                     // Handle mouse.move, mouse.click, mouse.down, mouse.up
                     if (method.rfind("mouse.", 0) == 0) {
-                        // For now, return success - full implementation would inject SDL events
-                        return "{}";
+                        std::string subMethod = method.substr(6); // After "mouse."
+                        float x = static_cast<float>(extractJsonNumber(params, "x", 0));
+                        float y = static_cast<float>(extractJsonNumber(params, "y", 0));
+                        std::string buttonStr = extractJsonString(params, "button");
+                        int button = SDL_BUTTON_LEFT;
+                        if (buttonStr == "right") button = SDL_BUTTON_RIGHT;
+                        else if (buttonStr == "middle") button = SDL_BUTTON_MIDDLE;
+
+                        if (subMethod == "move") {
+                            injectMouseMotion(x, y);
+                            return "{}";
+                        }
+                        if (subMethod == "click") {
+                            injectMouseButton(x, y, button, true);
+                            injectMouseButton(x, y, button, false);
+                            return "{}";
+                        }
+                        if (subMethod == "down") {
+                            injectMouseButton(x, y, button, true);
+                            return "{}";
+                        }
+                        if (subMethod == "up") {
+                            injectMouseButton(x, y, button, false);
+                            return "{}";
+                        }
+                        return "{\"error\":\"Unknown mouse method: " + subMethod + "\"}";
+                    }
+
+                    // Handle gamepad.press, gamepad.axis
+                    if (method.rfind("gamepad.", 0) == 0) {
+                        std::string subMethod = method.substr(8); // After "gamepad."
+
+                        if (subMethod == "press") {
+                            std::string buttonStr = extractJsonString(params, "button");
+                            // Map button names to SDL gamepad button enum
+                            SDL_GamepadButton button = SDL_GAMEPAD_BUTTON_INVALID;
+                            if (buttonStr == "A" || buttonStr == "a") button = SDL_GAMEPAD_BUTTON_SOUTH;
+                            else if (buttonStr == "B" || buttonStr == "b") button = SDL_GAMEPAD_BUTTON_EAST;
+                            else if (buttonStr == "X" || buttonStr == "x") button = SDL_GAMEPAD_BUTTON_WEST;
+                            else if (buttonStr == "Y" || buttonStr == "y") button = SDL_GAMEPAD_BUTTON_NORTH;
+                            else if (buttonStr == "LB" || buttonStr == "L1") button = SDL_GAMEPAD_BUTTON_LEFT_SHOULDER;
+                            else if (buttonStr == "RB" || buttonStr == "R1") button = SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER;
+                            else if (buttonStr == "Back" || buttonStr == "Select") button = SDL_GAMEPAD_BUTTON_BACK;
+                            else if (buttonStr == "Start") button = SDL_GAMEPAD_BUTTON_START;
+                            else if (buttonStr == "Guide" || buttonStr == "Home") button = SDL_GAMEPAD_BUTTON_GUIDE;
+                            else if (buttonStr == "LS" || buttonStr == "L3") button = SDL_GAMEPAD_BUTTON_LEFT_STICK;
+                            else if (buttonStr == "RS" || buttonStr == "R3") button = SDL_GAMEPAD_BUTTON_RIGHT_STICK;
+                            else if (buttonStr == "DPadUp") button = SDL_GAMEPAD_BUTTON_DPAD_UP;
+                            else if (buttonStr == "DPadDown") button = SDL_GAMEPAD_BUTTON_DPAD_DOWN;
+                            else if (buttonStr == "DPadLeft") button = SDL_GAMEPAD_BUTTON_DPAD_LEFT;
+                            else if (buttonStr == "DPadRight") button = SDL_GAMEPAD_BUTTON_DPAD_RIGHT;
+
+                            if (button == SDL_GAMEPAD_BUTTON_INVALID) {
+                                return "{\"error\":\"Unknown gamepad button: " + buttonStr + "\"}";
+                            }
+
+                            // Inject button press and release
+                            SDL_Event event;
+                            SDL_zero(event);
+                            event.type = SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+                            event.gbutton.button = button;
+                            event.gbutton.down = true;
+                            SDL_PushEvent(&event);
+
+                            event.type = SDL_EVENT_GAMEPAD_BUTTON_UP;
+                            event.gbutton.down = false;
+                            SDL_PushEvent(&event);
+                            return "{}";
+                        }
+                        if (subMethod == "axis") {
+                            std::string axisStr = extractJsonString(params, "axis");
+                            float x = static_cast<float>(extractJsonNumber(params, "x", 0));
+                            float y = static_cast<float>(extractJsonNumber(params, "y", 0));
+
+                            SDL_GamepadAxis axisX = SDL_GAMEPAD_AXIS_INVALID;
+                            SDL_GamepadAxis axisY = SDL_GAMEPAD_AXIS_INVALID;
+                            if (axisStr == "leftStick" || axisStr == "left") {
+                                axisX = SDL_GAMEPAD_AXIS_LEFTX;
+                                axisY = SDL_GAMEPAD_AXIS_LEFTY;
+                            } else if (axisStr == "rightStick" || axisStr == "right") {
+                                axisX = SDL_GAMEPAD_AXIS_RIGHTX;
+                                axisY = SDL_GAMEPAD_AXIS_RIGHTY;
+                            }
+
+                            if (axisX == SDL_GAMEPAD_AXIS_INVALID) {
+                                return "{\"error\":\"Unknown gamepad axis: " + axisStr + "\"}";
+                            }
+
+                            // Inject axis events (values are -32768 to 32767)
+                            SDL_Event event;
+                            SDL_zero(event);
+                            event.type = SDL_EVENT_GAMEPAD_AXIS_MOTION;
+                            event.gaxis.axis = axisX;
+                            event.gaxis.value = static_cast<int16_t>(x * 32767);
+                            SDL_PushEvent(&event);
+
+                            event.gaxis.axis = axisY;
+                            event.gaxis.value = static_cast<int16_t>(y * 32767);
+                            SDL_PushEvent(&event);
+                            return "{}";
+                        }
+                        return "{\"error\":\"Unknown gamepad method: " + subMethod + "\"}";
                     }
 
                     // Handle waitForFrame - returns empty to signal async handling
