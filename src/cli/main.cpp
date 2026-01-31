@@ -732,6 +732,9 @@ int runScript(const CLIOptions& opts) {
         // Normal mode: run main loop until quit
         runtime->run();
 
+        // Get exit code from process.exit() if called
+        int exitCode = runtime->getExitCode();
+
         if (!opts.quiet) {
             std::cout << "=== Script finished ===" << std::endl;
         }
@@ -745,13 +748,14 @@ int runScript(const CLIOptions& opts) {
         // Give the audio callback a brief moment to notice shutdown
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
         // SIGKILL is the only reliable termination on macOS with audio
+        // Note: We lose the exit code here, but this is the only reliable way to exit
         kill(getpid(), SIGKILL);
         // Unreachable, but suppresses compiler warning
-        return 0;
+        return exitCode;
 #elif !defined(_WIN32)
-        _exit(0);
+        _exit(exitCode);
 #else
-        ExitProcess(0);
+        ExitProcess(exitCode);
 #endif
     }
 

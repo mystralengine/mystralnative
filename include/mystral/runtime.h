@@ -89,6 +89,12 @@ public:
      */
     virtual void quit() = 0;
 
+    /**
+     * Get the exit code set by process.exit()
+     * @return Exit code (0 by default, or value passed to process.exit())
+     */
+    virtual int getExitCode() const = 0;
+
     // ========================================================================
     // Window Management
     // ========================================================================
