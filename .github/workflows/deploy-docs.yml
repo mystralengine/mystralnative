@@ -5,7 +5,7 @@ on:
     branches:
       - main
     paths:
-      - 'docs-site/**'
+      - 'docs/**'
       - '.github/workflows/deploy-docs.yml'
   workflow_dispatch:
 
@@ -38,17 +38,17 @@ jobs:
           enablement: true
 
       - name: Install dependencies
-        working-directory: docs-site
+        working-directory: docs
         run: bun install
 
       - name: Build docs
-        working-directory: docs-site
+        working-directory: docs
         run: bun run build
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: docs-site/dist
+          path: docs/dist
 
   deploy:
     environment:

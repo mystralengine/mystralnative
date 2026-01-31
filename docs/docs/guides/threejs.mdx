@@ -1,0 +1,192 @@
+# Three.js WebGPU
+
+Learn how to use Three.js with its WebGPU renderer in Mystral Native.js.
+
+<img src="/mystralnative/threejs-cube.png" alt="Three.js Cube Example" style={{maxWidth: '600px', borderRadius: '8px', margin: '20px 0'}} />
+
+## Requirements
+
+- Mystral Native.js v0.1.0 or later (V8 + Dawn recommended)
+- Node.js (for bundling)
+- three.js v0.182.0
+
+## Quick Start
+
+### 1. Install Three.js
+
+```bash
+npm install three@0.182.0
+```
+
+### 2. Create Your Script
+
+Create a file called `my-threejs-app.js`:
+
+```javascript
+import * as THREE from 'three/webgpu';
+
+async function main() {
+  // MystralNative provides 'canvas' globally
+  const renderer = new THREE.WebGPURenderer({
+    canvas: canvas,
+    antialias: false,
+  });
+
+  // Initialize WebGPU (required for three/webgpu)
+  await renderer.init();
+
+  // Setup renderer
+  const width = canvas.width || 1280;
+  const height = canvas.height || 720;
+  renderer.setSize(width, height, false);
+  renderer.setPixelRatio(1);
+
+  // Create scene with background color
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x1a1a2e);
+
+  // Create camera
+  const camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
+  camera.position.z = 3;
+
+  // Create a cube with PBR material
+  const geometry = new THREE.BoxGeometry(1, 1, 1);
+  const material = new THREE.MeshStandardMaterial({
+    color: 0x00ff88,
+    metalness: 0.3,
+    roughness: 0.4,
+  });
+  const cube = new THREE.Mesh(geometry, material);
+  scene.add(cube);
+
+  // Add lighting
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+  scene.add(ambientLight);
+
+  const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+  directionalLight.position.set(5, 5, 5);
+  scene.add(directionalLight);
+
+  // Animation loop
+  function animate() {
+    cube.rotation.x += 0.01;
+    cube.rotation.y += 0.01;
+    renderer.render(scene, camera);
+    requestAnimationFrame(animate);
+  }
+
+  animate();
+}
+
+main().catch(console.error);
+```
+
+### 3. Bundle Your Script
+
+Three.js uses ES modules and must be bundled before running with Mystral Native.js. Use esbuild:
+
+```bash
+# Install esbuild if you don't have it
+npm install -D esbuild
+
+# Bundle your script
+npx esbuild my-threejs-app.js \
+  --bundle \
+  --outfile=my-threejs-bundle.js \
+  --format=esm \
+  --platform=browser
+```
+
+### 4. Run with Mystral Native.js
+
+```bash
+mystral run my-threejs-bundle.js
+```
+
+You should see a spinning green cube on a dark blue background!
+
+## Using the Included Example
+
+The release includes a complete example at `examples/threejs-cube-src.js`:
+
+```bash
+# From the mystral installation directory
+npm install three@0.182.0
+
+npx esbuild examples/threejs-cube-src.js \
+  --bundle \
+  --outfile=threejs-bundle.js \
+  --format=esm \
+  --platform=browser
+
+mystral run threejs-bundle.js
+```
+
+## Key Differences from Browser
+
+When using Three.js with Mystral Native.js:
+
+| Browser | Mystral Native.js |
+|---------|-------------------|
+| Create your own canvas | Use the global `canvas` |
+| `import 'three'` (WebGL) | `import 'three/webgpu'` (WebGPU) |
+| Run directly in browser | Bundle first, then run |
+| Optional `renderer.init()` | Always `await renderer.init()` |
+
+## Supported Features
+
+The following Three.js features have been tested:
+
+- **Renderer**: WebGPURenderer with `three/webgpu`
+- **Materials**: MeshStandardMaterial (PBR), MeshBasicMaterial
+- **Lighting**: AmbientLight, DirectionalLight, PointLight
+- **Scene**: Background colors
+- **Animation**: requestAnimationFrame loop
+
+## Troubleshooting
+
+### Black Screen
+
+If you see a black screen:
+
+1. Make sure you're using Mystral Native.js v0.1.0+ with V8 + Dawn backend
+2. Check the console for errors
+3. Verify `await renderer.init()` is called before rendering
+
+### "three/webgpu not found"
+
+Ensure you:
+1. Have three.js installed: `npm install three@0.182.0`
+2. Are bundling the script before running (see step 3)
+
+### Module Resolution Errors
+
+If esbuild can't find modules:
+- Run from the directory containing `node_modules`
+- Check that three.js is installed correctly
+
+## Performance Tips
+
+```javascript
+// Use these settings for best performance
+const renderer = new THREE.WebGPURenderer({
+  canvas: canvas,
+  antialias: false,  // Disable antialiasing
+});
+
+renderer.setPixelRatio(1);  // Avoid unnecessary resolution scaling
+```
+
+The **V8 + Dawn** configuration provides the best Three.js compatibility and performance.
+
+## Version Compatibility
+
+| Mystral Native.js | Three.js | Status |
+|-------------------|----------|--------|
+| v0.1.0+           | 0.182.0  | ✅ Tested |
+
+## Next Steps
+
+- [Running Games](/mystralnative/docs/guides/running-games) - More CLI options
+- [Building from Source](/mystralnative/docs/guides/building) - Custom builds
+- [Three.js Documentation](https://threejs.org/docs/) - Official Three.js docs
