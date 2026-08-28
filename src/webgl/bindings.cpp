@@ -193,7 +193,12 @@ void installConstants(js::JSValueHandle object) {
   WEBGL_CONSTANT(FLOAT_MAT3);
   WEBGL_CONSTANT(FLOAT_MAT4);
   WEBGL_CONSTANT(SAMPLER_2D_SHADOW);
+  WEBGL_CONSTANT(LOW_FLOAT);
+  WEBGL_CONSTANT(MEDIUM_FLOAT);
   WEBGL_CONSTANT(HIGH_FLOAT);
+  WEBGL_CONSTANT(LOW_INT);
+  WEBGL_CONSTANT(MEDIUM_INT);
+  WEBGL_CONSTANT(HIGH_INT);
   WEBGL_CONSTANT(RENDERER);
   WEBGL_CONSTANT(VENDOR);
   WEBGL_CONSTANT(VERSION);
@@ -387,6 +392,9 @@ js::JSValueHandle createContextJSObject(js::Engine *engine, uint32_t width,
               << std::endl;
   }
 
+  // Context methods live as long as the JS context object. Do not release their
+  // native callback closures at the end of the frame that created the context.
+  engine->suspendFrameTracking();
   auto gl = engine->newObject();
   engine->setPrivateData(gl, capturedContext);
   engine->setProperty(gl, "_contextType", engine->newString("webgl2"));
@@ -1309,6 +1317,7 @@ js::JSValueHandle createContextJSObject(js::Engine *engine, uint32_t width,
   if (engine->isFunction(setPrototype)) {
     engine->call(setPrototype, engine->newUndefined(), {gl});
   }
+  engine->resumeFrameTracking();
   return gl;
 }
 
