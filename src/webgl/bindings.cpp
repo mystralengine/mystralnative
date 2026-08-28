@@ -42,7 +42,7 @@ js::JSValueHandle wrapGLObject(uint32_t id, const char *type) {
   }
   auto object = g_engine->newObject();
   g_engine->setPrivateData(
-      object, reinterpret_cast<void *>(static_cast<uintptr_t>(id)));
+      object, reinterpret_cast<void *>(static_cast<uintptr_t>(id) + 1));
   g_engine->setProperty(object, "_id", g_engine->newNumber(id));
   g_engine->setProperty(object, "_type", g_engine->newString(type));
   return object;
@@ -55,8 +55,22 @@ uint32_t unwrapGLObject(js::JSValueHandle value) {
   if (g_engine->isNumber(value)) {
     return toUint32(value);
   }
-  return static_cast<uint32_t>(
-      reinterpret_cast<uintptr_t>(g_engine->getPrivateData(value)));
+  const uintptr_t encoded =
+      reinterpret_cast<uintptr_t>(g_engine->getPrivateData(value));
+  return encoded > 0 ? static_cast<uint32_t>(encoded - 1) : 0;
+}
+
+js::JSValueHandle wrapUniformLocation(int32_t location) {
+  if (location < 0) {
+    return g_engine->newNull();
+  }
+  auto object = g_engine->newObject();
+  g_engine->setPrivateData(
+      object, reinterpret_cast<void *>(static_cast<uintptr_t>(location) + 1));
+  g_engine->setProperty(object, "_id", g_engine->newNumber(location));
+  g_engine->setProperty(object, "_type",
+                        g_engine->newString("uniformLocation"));
+  return object;
 }
 
 bool requireArguments(const std::vector<js::JSValueHandle> &args, size_t count,
@@ -68,6 +82,32 @@ bool requireArguments(const std::vector<js::JSValueHandle> &args, size_t count,
       std::string(method) + " requires " + std::to_string(count) + " arguments";
   g_engine->throwException(message.c_str());
   return false;
+}
+
+template <typename Value>
+std::vector<Value> readNumericArray(js::JSValueHandle value) {
+  size_t byteLength = 0;
+  void *bytes = g_engine->getArrayBufferData(value, &byteLength);
+  if (bytes && byteLength >= sizeof(Value)) {
+    const auto *begin = static_cast<const Value *>(bytes);
+    return {begin, begin + byteLength / sizeof(Value)};
+  }
+
+  const uint32_t length = static_cast<uint32_t>(
+      g_engine->toNumber(g_engine->getProperty(value, "length")));
+  std::vector<Value> result(length);
+  for (uint32_t index = 0; index < length; ++index) {
+    result[index] = static_cast<Value>(
+        g_engine->toNumber(g_engine->getPropertyIndex(value, index)));
+  }
+  return result;
+}
+
+const void *readPixelData(js::JSValueHandle value) {
+  if (g_engine->isNull(value) || g_engine->isUndefined(value)) {
+    return nullptr;
+  }
+  return g_engine->getArrayBufferData(value, nullptr);
 }
 
 void setConstant(js::JSValueHandle object, const char *name, uint32_t value) {
@@ -91,17 +131,55 @@ void installConstants(js::JSValueHandle object) {
   WEBGL_CONSTANT(TRIANGLES);
   WEBGL_CONSTANT(TRIANGLE_STRIP);
   WEBGL_CONSTANT(TRIANGLE_FAN);
+  WEBGL_CONSTANT(ZERO);
+  WEBGL_CONSTANT(ONE);
+  WEBGL_CONSTANT(SRC_COLOR);
+  WEBGL_CONSTANT(ONE_MINUS_SRC_COLOR);
+  WEBGL_CONSTANT(SRC_ALPHA);
+  WEBGL_CONSTANT(ONE_MINUS_SRC_ALPHA);
+  WEBGL_CONSTANT(DST_ALPHA);
+  WEBGL_CONSTANT(ONE_MINUS_DST_ALPHA);
+  WEBGL_CONSTANT(DST_COLOR);
+  WEBGL_CONSTANT(ONE_MINUS_DST_COLOR);
+  WEBGL_CONSTANT(SRC_ALPHA_SATURATE);
+  WEBGL_CONSTANT(CONSTANT_COLOR);
+  WEBGL_CONSTANT(ONE_MINUS_CONSTANT_COLOR);
+  WEBGL_CONSTANT(CONSTANT_ALPHA);
+  WEBGL_CONSTANT(ONE_MINUS_CONSTANT_ALPHA);
+  WEBGL_CONSTANT(FUNC_ADD);
+  WEBGL_CONSTANT(FUNC_SUBTRACT);
+  WEBGL_CONSTANT(FUNC_REVERSE_SUBTRACT);
+  WEBGL_CONSTANT(MIN);
+  WEBGL_CONSTANT(MAX);
   WEBGL_CONSTANT(ARRAY_BUFFER);
   WEBGL_CONSTANT(ELEMENT_ARRAY_BUFFER);
   WEBGL_CONSTANT(STATIC_DRAW);
   WEBGL_CONSTANT(DYNAMIC_DRAW);
   WEBGL_CONSTANT(STREAM_DRAW);
   WEBGL_CONSTANT(FLOAT);
+  WEBGL_CONSTANT(HALF_FLOAT);
+  WEBGL_CONSTANT(INT);
   WEBGL_CONSTANT(UNSIGNED_BYTE);
   WEBGL_CONSTANT(UNSIGNED_SHORT);
   WEBGL_CONSTANT(UNSIGNED_INT);
-  WEBGL_CONSTANT(RGBA);
+  WEBGL_CONSTANT(UNSIGNED_SHORT_4_4_4_4);
+  WEBGL_CONSTANT(UNSIGNED_SHORT_5_5_5_1);
+  WEBGL_CONSTANT(RED);
+  WEBGL_CONSTANT(RG);
   WEBGL_CONSTANT(RGB);
+  WEBGL_CONSTANT(RGBA);
+  WEBGL_CONSTANT(RED_INTEGER);
+  WEBGL_CONSTANT(RG_INTEGER);
+  WEBGL_CONSTANT(RGB_INTEGER);
+  WEBGL_CONSTANT(RGBA_INTEGER);
+  WEBGL_CONSTANT(R16F);
+  WEBGL_CONSTANT(RG16F);
+  WEBGL_CONSTANT(RGBA16F);
+  WEBGL_CONSTANT(R32F);
+  WEBGL_CONSTANT(RG32F);
+  WEBGL_CONSTANT(RGBA32F);
+  WEBGL_CONSTANT(RGBA8);
+  WEBGL_CONSTANT(DEPTH_COMPONENT24);
   WEBGL_CONSTANT(VERTEX_SHADER);
   WEBGL_CONSTANT(FRAGMENT_SHADER);
   WEBGL_CONSTANT(COMPILE_STATUS);
@@ -109,6 +187,13 @@ void installConstants(js::JSValueHandle object) {
   WEBGL_CONSTANT(VALIDATE_STATUS);
   WEBGL_CONSTANT(DELETE_STATUS);
   WEBGL_CONSTANT(INFO_LOG_LENGTH);
+  WEBGL_CONSTANT(ACTIVE_ATTRIBUTES);
+  WEBGL_CONSTANT(ACTIVE_UNIFORMS);
+  WEBGL_CONSTANT(FLOAT_MAT2);
+  WEBGL_CONSTANT(FLOAT_MAT3);
+  WEBGL_CONSTANT(FLOAT_MAT4);
+  WEBGL_CONSTANT(SAMPLER_2D_SHADOW);
+  WEBGL_CONSTANT(HIGH_FLOAT);
   WEBGL_CONSTANT(RENDERER);
   WEBGL_CONSTANT(VENDOR);
   WEBGL_CONSTANT(VERSION);
@@ -122,7 +207,58 @@ void installConstants(js::JSValueHandle object) {
   WEBGL_CONSTANT(MAX_VERTEX_UNIFORM_VECTORS);
   WEBGL_CONSTANT(MAX_FRAGMENT_UNIFORM_VECTORS);
   WEBGL_CONSTANT(MAX_VARYING_VECTORS);
+  WEBGL_CONSTANT(MAX_SAMPLES);
+  WEBGL_CONSTANT(MAX_UNIFORM_BUFFER_BINDINGS);
+  WEBGL_CONSTANT(NEVER);
+  WEBGL_CONSTANT(LESS);
+  WEBGL_CONSTANT(EQUAL);
+  WEBGL_CONSTANT(LEQUAL);
+  WEBGL_CONSTANT(GREATER);
+  WEBGL_CONSTANT(NOTEQUAL);
+  WEBGL_CONSTANT(GEQUAL);
+  WEBGL_CONSTANT(ALWAYS);
+  WEBGL_CONSTANT(CW);
+  WEBGL_CONSTANT(CCW);
+  WEBGL_CONSTANT(FRONT);
+  WEBGL_CONSTANT(BACK);
+  WEBGL_CONSTANT(CULL_FACE);
+  WEBGL_CONSTANT(DEPTH_TEST);
+  WEBGL_CONSTANT(STENCIL_TEST);
+  WEBGL_CONSTANT(SCISSOR_TEST);
+  WEBGL_CONSTANT(POLYGON_OFFSET_FILL);
+  WEBGL_CONSTANT(SAMPLE_ALPHA_TO_COVERAGE);
+  WEBGL_CONSTANT(SCISSOR_BOX);
+  WEBGL_CONSTANT(VIEWPORT);
+  WEBGL_CONSTANT(NONE);
+  WEBGL_CONSTANT(TEXTURE0);
+  WEBGL_CONSTANT(TEXTURE_2D);
+  WEBGL_CONSTANT(TEXTURE_3D);
+  WEBGL_CONSTANT(TEXTURE_2D_ARRAY);
+  WEBGL_CONSTANT(TEXTURE_CUBE_MAP);
+  WEBGL_CONSTANT(TEXTURE_CUBE_MAP_POSITIVE_X);
+  WEBGL_CONSTANT(TEXTURE_MAG_FILTER);
+  WEBGL_CONSTANT(TEXTURE_MIN_FILTER);
+  WEBGL_CONSTANT(TEXTURE_WRAP_S);
+  WEBGL_CONSTANT(TEXTURE_WRAP_T);
+  WEBGL_CONSTANT(NEAREST);
+  WEBGL_CONSTANT(LINEAR);
+  WEBGL_CONSTANT(NEAREST_MIPMAP_NEAREST);
+  WEBGL_CONSTANT(LINEAR_MIPMAP_NEAREST);
+  WEBGL_CONSTANT(NEAREST_MIPMAP_LINEAR);
+  WEBGL_CONSTANT(LINEAR_MIPMAP_LINEAR);
+  WEBGL_CONSTANT(REPEAT);
+  WEBGL_CONSTANT(CLAMP_TO_EDGE);
+  WEBGL_CONSTANT(MIRRORED_REPEAT);
+  WEBGL_CONSTANT(FRAMEBUFFER);
+  WEBGL_CONSTANT(DRAW_FRAMEBUFFER);
+  WEBGL_CONSTANT(RENDERBUFFER);
+  WEBGL_CONSTANT(COLOR_ATTACHMENT0);
+  WEBGL_CONSTANT(DEPTH_ATTACHMENT);
+  WEBGL_CONSTANT(UNPACK_ALIGNMENT);
 #undef WEBGL_CONSTANT
+  setConstant(object, "UNPACK_FLIP_Y_WEBGL", 0x9240);
+  setConstant(object, "UNPACK_PREMULTIPLY_ALPHA_WEBGL", 0x9241);
+  setConstant(object, "UNPACK_COLORSPACE_CONVERSION_WEBGL", 0x9243);
 }
 
 ContextAttributes
@@ -180,7 +316,20 @@ bool initBindings(js::Engine *engine, bool debug) {
   if (g_debug) {
     std::cout << "[WebGL] Native window: " << g_nativeWindow << std::endl;
   }
-  return true;
+
+  return engine->evalScript(R"JS(
+if (typeof globalThis.WebGLRenderingContext === "undefined") {
+  globalThis.WebGLRenderingContext = class WebGLRenderingContext {};
+}
+if (typeof globalThis.WebGL2RenderingContext === "undefined") {
+  globalThis.WebGL2RenderingContext = class WebGL2RenderingContext extends WebGLRenderingContext {};
+}
+globalThis.__mystralSetWebGL2Prototype = value => {
+  Object.setPrototypeOf(value, WebGL2RenderingContext.prototype);
+  return value;
+};
+)JS",
+                            "<webgl-bindings>");
 }
 
 void presentContexts() {
@@ -308,6 +457,25 @@ js::JSValueHandle createContextJSObject(js::Engine *engine, uint32_t width,
                 capturedContext->getShaderInfoLog(unwrapGLObject(args[0]))
                     .c_str());
           }));
+  engine->setProperty(
+      gl, "getShaderPrecisionFormat",
+      engine->newFunction(
+          "getShaderPrecisionFormat",
+          [capturedContext](void *,
+                            const std::vector<js::JSValueHandle> &args) {
+            if (!requireArguments(args, 2, "getShaderPrecisionFormat"))
+              return g_engine->newNull();
+            const auto format = capturedContext->getShaderPrecisionFormat(
+                toUint32(args[0]), toUint32(args[1]));
+            auto result = g_engine->newObject();
+            g_engine->setProperty(result, "rangeMin",
+                                  g_engine->newNumber(format.rangeMin));
+            g_engine->setProperty(result, "rangeMax",
+                                  g_engine->newNumber(format.rangeMax));
+            g_engine->setProperty(result, "precision",
+                                  g_engine->newNumber(format.precision));
+            return result;
+          }));
 
   engine->setProperty(
       gl, "createProgram",
@@ -380,6 +548,47 @@ js::JSValueHandle createContextJSObject(js::Engine *engine, uint32_t width,
             }
             return g_engine->newUndefined();
           }));
+  const auto wrapActiveInfo = [](const ActiveInfo &info) {
+    auto result = g_engine->newObject();
+    g_engine->setProperty(result, "name",
+                          g_engine->newString(info.name.c_str()));
+    g_engine->setProperty(result, "size", g_engine->newNumber(info.size));
+    g_engine->setProperty(result, "type", g_engine->newNumber(info.type));
+    return result;
+  };
+  engine->setProperty(
+      gl, "getActiveAttrib",
+      engine->newFunction(
+          "getActiveAttrib",
+          [capturedContext,
+           wrapActiveInfo](void *, const std::vector<js::JSValueHandle> &args) {
+            if (!requireArguments(args, 2, "getActiveAttrib"))
+              return g_engine->newNull();
+            return wrapActiveInfo(capturedContext->getActiveAttrib(
+                unwrapGLObject(args[0]), toUint32(args[1])));
+          }));
+  engine->setProperty(
+      gl, "getActiveUniform",
+      engine->newFunction(
+          "getActiveUniform",
+          [capturedContext,
+           wrapActiveInfo](void *, const std::vector<js::JSValueHandle> &args) {
+            if (!requireArguments(args, 2, "getActiveUniform"))
+              return g_engine->newNull();
+            return wrapActiveInfo(capturedContext->getActiveUniform(
+                unwrapGLObject(args[0]), toUint32(args[1])));
+          }));
+  engine->setProperty(
+      gl, "getUniformLocation",
+      engine->newFunction(
+          "getUniformLocation",
+          [capturedContext](void *,
+                            const std::vector<js::JSValueHandle> &args) {
+            if (!requireArguments(args, 2, "getUniformLocation"))
+              return g_engine->newNull();
+            return wrapUniformLocation(capturedContext->getUniformLocation(
+                unwrapGLObject(args[0]), g_engine->toString(args[1])));
+          }));
 
   engine->setProperty(
       gl, "createBuffer",
@@ -424,6 +633,80 @@ js::JSValueHandle createContextJSObject(js::Engine *engine, uint32_t width,
                                         toUint32(args[2]));
             return g_engine->newUndefined();
           }));
+  engine->setProperty(
+      gl, "createFramebuffer",
+      engine->newFunction(
+          "createFramebuffer",
+          [capturedContext](void *, const std::vector<js::JSValueHandle> &) {
+            return wrapGLObject(capturedContext->createFramebuffer(),
+                                "framebuffer");
+          }));
+  engine->setProperty(
+      gl, "bindFramebuffer",
+      engine->newFunction(
+          "bindFramebuffer",
+          [capturedContext](void *,
+                            const std::vector<js::JSValueHandle> &args) {
+            if (requireArguments(args, 2, "bindFramebuffer"))
+              capturedContext->bindFramebuffer(toUint32(args[0]),
+                                               unwrapGLObject(args[1]));
+            return g_engine->newUndefined();
+          }));
+  engine->setProperty(
+      gl, "createRenderbuffer",
+      engine->newFunction(
+          "createRenderbuffer",
+          [capturedContext](void *, const std::vector<js::JSValueHandle> &) {
+            return wrapGLObject(capturedContext->createRenderbuffer(),
+                                "renderbuffer");
+          }));
+  engine->setProperty(
+      gl, "bindRenderbuffer",
+      engine->newFunction(
+          "bindRenderbuffer",
+          [capturedContext](void *,
+                            const std::vector<js::JSValueHandle> &args) {
+            if (requireArguments(args, 2, "bindRenderbuffer"))
+              capturedContext->bindRenderbuffer(toUint32(args[0]),
+                                                unwrapGLObject(args[1]));
+            return g_engine->newUndefined();
+          }));
+  engine->setProperty(
+      gl, "createTexture",
+      engine->newFunction(
+          "createTexture",
+          [capturedContext](void *, const std::vector<js::JSValueHandle> &) {
+            return wrapGLObject(capturedContext->createTexture(), "texture");
+          }));
+  engine->setProperty(
+      gl, "bindTexture",
+      engine->newFunction(
+          "bindTexture",
+          [capturedContext](void *,
+                            const std::vector<js::JSValueHandle> &args) {
+            if (requireArguments(args, 2, "bindTexture"))
+              capturedContext->bindTexture(toUint32(args[0]),
+                                           unwrapGLObject(args[1]));
+            return g_engine->newUndefined();
+          }));
+  engine->setProperty(
+      gl, "createVertexArray",
+      engine->newFunction(
+          "createVertexArray",
+          [capturedContext](void *, const std::vector<js::JSValueHandle> &) {
+            return wrapGLObject(capturedContext->createVertexArray(),
+                                "vertexArray");
+          }));
+  engine->setProperty(
+      gl, "bindVertexArray",
+      engine->newFunction(
+          "bindVertexArray",
+          [capturedContext](void *,
+                            const std::vector<js::JSValueHandle> &args) {
+            if (requireArguments(args, 1, "bindVertexArray"))
+              capturedContext->bindVertexArray(unwrapGLObject(args[0]));
+            return g_engine->newUndefined();
+          }));
 
   engine->setProperty(
       gl, "getAttribLocation",
@@ -458,6 +741,374 @@ js::JSValueHandle createContextJSObject(js::Engine *engine, uint32_t width,
                   toUint32(args[0]), toInt32(args[1]), toUint32(args[2]),
                   g_engine->toBoolean(args[3]), toInt32(args[4]),
                   static_cast<size_t>(g_engine->toNumber(args[5])));
+            }
+            return g_engine->newUndefined();
+          }));
+
+  engine->setProperty(
+      gl, "vertexAttribDivisor",
+      engine->newFunction(
+          "vertexAttribDivisor",
+          [capturedContext](void *,
+                            const std::vector<js::JSValueHandle> &args) {
+            if (requireArguments(args, 2, "vertexAttribDivisor"))
+              capturedContext->vertexAttribDivisor(toUint32(args[0]),
+                                                   toUint32(args[1]));
+            return g_engine->newUndefined();
+          }));
+
+  engine->setProperty(
+      gl, "activeTexture",
+      engine->newFunction(
+          "activeTexture",
+          [capturedContext](void *,
+                            const std::vector<js::JSValueHandle> &args) {
+            if (requireArguments(args, 1, "activeTexture"))
+              capturedContext->activeTexture(toUint32(args[0]));
+            return g_engine->newUndefined();
+          }));
+  engine->setProperty(
+      gl, "clearDepth",
+      engine->newFunction(
+          "clearDepth",
+          [capturedContext](void *,
+                            const std::vector<js::JSValueHandle> &args) {
+            if (requireArguments(args, 1, "clearDepth"))
+              capturedContext->clearDepth(toFloat(args[0]));
+            return g_engine->newUndefined();
+          }));
+  engine->setProperty(
+      gl, "clearStencil",
+      engine->newFunction(
+          "clearStencil",
+          [capturedContext](void *,
+                            const std::vector<js::JSValueHandle> &args) {
+            if (requireArguments(args, 1, "clearStencil"))
+              capturedContext->clearStencil(toInt32(args[0]));
+            return g_engine->newUndefined();
+          }));
+  engine->setProperty(
+      gl, "colorMask",
+      engine->newFunction(
+          "colorMask", [capturedContext](
+                           void *, const std::vector<js::JSValueHandle> &args) {
+            if (requireArguments(args, 4, "colorMask"))
+              capturedContext->colorMask(
+                  g_engine->toBoolean(args[0]), g_engine->toBoolean(args[1]),
+                  g_engine->toBoolean(args[2]), g_engine->toBoolean(args[3]));
+            return g_engine->newUndefined();
+          }));
+  engine->setProperty(
+      gl, "cullFace",
+      engine->newFunction(
+          "cullFace", [capturedContext](
+                          void *, const std::vector<js::JSValueHandle> &args) {
+            if (requireArguments(args, 1, "cullFace"))
+              capturedContext->cullFace(toUint32(args[0]));
+            return g_engine->newUndefined();
+          }));
+  engine->setProperty(
+      gl, "deleteShader",
+      engine->newFunction(
+          "deleteShader",
+          [capturedContext](void *,
+                            const std::vector<js::JSValueHandle> &args) {
+            if (requireArguments(args, 1, "deleteShader"))
+              capturedContext->deleteShader(unwrapGLObject(args[0]));
+            return g_engine->newUndefined();
+          }));
+  engine->setProperty(
+      gl, "depthFunc",
+      engine->newFunction(
+          "depthFunc", [capturedContext](
+                           void *, const std::vector<js::JSValueHandle> &args) {
+            if (requireArguments(args, 1, "depthFunc"))
+              capturedContext->depthFunc(toUint32(args[0]));
+            return g_engine->newUndefined();
+          }));
+  engine->setProperty(
+      gl, "depthMask",
+      engine->newFunction(
+          "depthMask", [capturedContext](
+                           void *, const std::vector<js::JSValueHandle> &args) {
+            if (requireArguments(args, 1, "depthMask"))
+              capturedContext->depthMask(g_engine->toBoolean(args[0]));
+            return g_engine->newUndefined();
+          }));
+  engine->setProperty(
+      gl, "disable",
+      engine->newFunction(
+          "disable", [capturedContext](
+                         void *, const std::vector<js::JSValueHandle> &args) {
+            if (requireArguments(args, 1, "disable"))
+              capturedContext->disable(toUint32(args[0]));
+            return g_engine->newUndefined();
+          }));
+  engine->setProperty(
+      gl, "enable",
+      engine->newFunction(
+          "enable", [capturedContext](
+                        void *, const std::vector<js::JSValueHandle> &args) {
+            if (requireArguments(args, 1, "enable"))
+              capturedContext->enable(toUint32(args[0]));
+            return g_engine->newUndefined();
+          }));
+  engine->setProperty(
+      gl, "frontFace",
+      engine->newFunction(
+          "frontFace", [capturedContext](
+                           void *, const std::vector<js::JSValueHandle> &args) {
+            if (requireArguments(args, 1, "frontFace"))
+              capturedContext->frontFace(toUint32(args[0]));
+            return g_engine->newUndefined();
+          }));
+  engine->setProperty(
+      gl, "pixelStorei",
+      engine->newFunction(
+          "pixelStorei",
+          [capturedContext](void *,
+                            const std::vector<js::JSValueHandle> &args) {
+            if (requireArguments(args, 2, "pixelStorei"))
+              capturedContext->pixelStorei(toUint32(args[0]), toInt32(args[1]));
+            return g_engine->newUndefined();
+          }));
+  engine->setProperty(
+      gl, "scissor",
+      engine->newFunction(
+          "scissor", [capturedContext](
+                         void *, const std::vector<js::JSValueHandle> &args) {
+            if (requireArguments(args, 4, "scissor"))
+              capturedContext->scissor(toInt32(args[0]), toInt32(args[1]),
+                                       toInt32(args[2]), toInt32(args[3]));
+            return g_engine->newUndefined();
+          }));
+  engine->setProperty(
+      gl, "stencilMask",
+      engine->newFunction(
+          "stencilMask",
+          [capturedContext](void *,
+                            const std::vector<js::JSValueHandle> &args) {
+            if (requireArguments(args, 1, "stencilMask"))
+              capturedContext->stencilMask(toUint32(args[0]));
+            return g_engine->newUndefined();
+          }));
+
+  engine->setProperty(
+      gl, "framebufferRenderbuffer",
+      engine->newFunction(
+          "framebufferRenderbuffer",
+          [capturedContext](void *,
+                            const std::vector<js::JSValueHandle> &args) {
+            if (requireArguments(args, 4, "framebufferRenderbuffer"))
+              capturedContext->framebufferRenderbuffer(
+                  toUint32(args[0]), toUint32(args[1]), toUint32(args[2]),
+                  unwrapGLObject(args[3]));
+            return g_engine->newUndefined();
+          }));
+  engine->setProperty(
+      gl, "framebufferTexture2D",
+      engine->newFunction(
+          "framebufferTexture2D",
+          [capturedContext](void *,
+                            const std::vector<js::JSValueHandle> &args) {
+            if (requireArguments(args, 5, "framebufferTexture2D"))
+              capturedContext->framebufferTexture2D(
+                  toUint32(args[0]), toUint32(args[1]), toUint32(args[2]),
+                  unwrapGLObject(args[3]), toInt32(args[4]));
+            return g_engine->newUndefined();
+          }));
+  engine->setProperty(
+      gl, "renderbufferStorage",
+      engine->newFunction(
+          "renderbufferStorage",
+          [capturedContext](void *,
+                            const std::vector<js::JSValueHandle> &args) {
+            if (requireArguments(args, 4, "renderbufferStorage"))
+              capturedContext->renderbufferStorage(
+                  toUint32(args[0]), toUint32(args[1]), toInt32(args[2]),
+                  toInt32(args[3]));
+            return g_engine->newUndefined();
+          }));
+  engine->setProperty(
+      gl, "drawBuffers",
+      engine->newFunction(
+          "drawBuffers",
+          [capturedContext](void *,
+                            const std::vector<js::JSValueHandle> &args) {
+            if (requireArguments(args, 1, "drawBuffers"))
+              capturedContext->drawBuffers(readNumericArray<uint32_t>(args[0]));
+            return g_engine->newUndefined();
+          }));
+
+  engine->setProperty(
+      gl, "texImage2D",
+      engine->newFunction(
+          "texImage2D",
+          [capturedContext](void *,
+                            const std::vector<js::JSValueHandle> &args) {
+            if (requireArguments(args, 9, "texImage2D"))
+              capturedContext->texImage2D(
+                  toUint32(args[0]), toInt32(args[1]), toInt32(args[2]),
+                  toInt32(args[3]), toInt32(args[4]), toInt32(args[5]),
+                  toUint32(args[6]), toUint32(args[7]), readPixelData(args[8]));
+            return g_engine->newUndefined();
+          }));
+  engine->setProperty(
+      gl, "texImage3D",
+      engine->newFunction(
+          "texImage3D",
+          [capturedContext](void *,
+                            const std::vector<js::JSValueHandle> &args) {
+            if (requireArguments(args, 10, "texImage3D"))
+              capturedContext->texImage3D(
+                  toUint32(args[0]), toInt32(args[1]), toInt32(args[2]),
+                  toInt32(args[3]), toInt32(args[4]), toInt32(args[5]),
+                  toInt32(args[6]), toUint32(args[7]), toUint32(args[8]),
+                  readPixelData(args[9]));
+            return g_engine->newUndefined();
+          }));
+  engine->setProperty(
+      gl, "texParameteri",
+      engine->newFunction(
+          "texParameteri",
+          [capturedContext](void *,
+                            const std::vector<js::JSValueHandle> &args) {
+            if (requireArguments(args, 3, "texParameteri"))
+              capturedContext->texParameteri(
+                  toUint32(args[0]), toUint32(args[1]), toInt32(args[2]));
+            return g_engine->newUndefined();
+          }));
+  engine->setProperty(
+      gl, "texStorage2D",
+      engine->newFunction(
+          "texStorage2D",
+          [capturedContext](void *,
+                            const std::vector<js::JSValueHandle> &args) {
+            if (requireArguments(args, 5, "texStorage2D"))
+              capturedContext->texStorage2D(toUint32(args[0]), toInt32(args[1]),
+                                            toUint32(args[2]), toInt32(args[3]),
+                                            toInt32(args[4]));
+            return g_engine->newUndefined();
+          }));
+  engine->setProperty(
+      gl, "texSubImage2D",
+      engine->newFunction(
+          "texSubImage2D",
+          [capturedContext](void *,
+                            const std::vector<js::JSValueHandle> &args) {
+            if (requireArguments(args, 9, "texSubImage2D"))
+              capturedContext->texSubImage2D(
+                  toUint32(args[0]), toInt32(args[1]), toInt32(args[2]),
+                  toInt32(args[3]), toInt32(args[4]), toInt32(args[5]),
+                  toUint32(args[6]), toUint32(args[7]), readPixelData(args[8]));
+            return g_engine->newUndefined();
+          }));
+
+  const auto validUniform = [](const std::vector<js::JSValueHandle> &args) {
+    return !args.empty() && !g_engine->isNull(args[0]) &&
+           !g_engine->isUndefined(args[0]);
+  };
+  engine->setProperty(
+      gl, "uniform1f",
+      engine->newFunction(
+          "uniform1f", [capturedContext, validUniform](
+                           void *, const std::vector<js::JSValueHandle> &args) {
+            if (requireArguments(args, 2, "uniform1f") && validUniform(args))
+              capturedContext->uniform1f(
+                  static_cast<int32_t>(unwrapGLObject(args[0])),
+                  toFloat(args[1]));
+            return g_engine->newUndefined();
+          }));
+  engine->setProperty(
+      gl, "uniform1i",
+      engine->newFunction(
+          "uniform1i", [capturedContext, validUniform](
+                           void *, const std::vector<js::JSValueHandle> &args) {
+            if (requireArguments(args, 2, "uniform1i") && validUniform(args))
+              capturedContext->uniform1i(
+                  static_cast<int32_t>(unwrapGLObject(args[0])),
+                  toInt32(args[1]));
+            return g_engine->newUndefined();
+          }));
+  engine->setProperty(
+      gl, "uniform1iv",
+      engine->newFunction(
+          "uniform1iv",
+          [capturedContext,
+           validUniform](void *, const std::vector<js::JSValueHandle> &args) {
+            if (requireArguments(args, 2, "uniform1iv") && validUniform(args)) {
+              const auto values = readNumericArray<int32_t>(args[1]);
+              capturedContext->uniform1iv(
+                  static_cast<int32_t>(unwrapGLObject(args[0])),
+                  static_cast<int32_t>(values.size()), values.data());
+            }
+            return g_engine->newUndefined();
+          }));
+  engine->setProperty(
+      gl, "uniform2f",
+      engine->newFunction(
+          "uniform2f", [capturedContext, validUniform](
+                           void *, const std::vector<js::JSValueHandle> &args) {
+            if (requireArguments(args, 3, "uniform2f") && validUniform(args))
+              capturedContext->uniform2f(
+                  static_cast<int32_t>(unwrapGLObject(args[0])),
+                  toFloat(args[1]), toFloat(args[2]));
+            return g_engine->newUndefined();
+          }));
+  engine->setProperty(
+      gl, "uniform3f",
+      engine->newFunction(
+          "uniform3f", [capturedContext, validUniform](
+                           void *, const std::vector<js::JSValueHandle> &args) {
+            if (requireArguments(args, 4, "uniform3f") && validUniform(args))
+              capturedContext->uniform3f(
+                  static_cast<int32_t>(unwrapGLObject(args[0])),
+                  toFloat(args[1]), toFloat(args[2]), toFloat(args[3]));
+            return g_engine->newUndefined();
+          }));
+  engine->setProperty(
+      gl, "uniform3fv",
+      engine->newFunction(
+          "uniform3fv",
+          [capturedContext,
+           validUniform](void *, const std::vector<js::JSValueHandle> &args) {
+            if (requireArguments(args, 2, "uniform3fv") && validUniform(args)) {
+              const auto values = readNumericArray<float>(args[1]);
+              capturedContext->uniform3fv(
+                  static_cast<int32_t>(unwrapGLObject(args[0])),
+                  static_cast<int32_t>(values.size() / 3), values.data());
+            }
+            return g_engine->newUndefined();
+          }));
+  engine->setProperty(
+      gl, "uniformMatrix3fv",
+      engine->newFunction(
+          "uniformMatrix3fv",
+          [capturedContext,
+           validUniform](void *, const std::vector<js::JSValueHandle> &args) {
+            if (requireArguments(args, 3, "uniformMatrix3fv") &&
+                validUniform(args)) {
+              const auto values = readNumericArray<float>(args[2]);
+              capturedContext->uniformMatrix3fv(
+                  static_cast<int32_t>(unwrapGLObject(args[0])),
+                  static_cast<int32_t>(values.size() / 9),
+                  g_engine->toBoolean(args[1]), values.data());
+            }
+            return g_engine->newUndefined();
+          }));
+  engine->setProperty(
+      gl, "uniformMatrix4fv",
+      engine->newFunction(
+          "uniformMatrix4fv",
+          [capturedContext,
+           validUniform](void *, const std::vector<js::JSValueHandle> &args) {
+            if (requireArguments(args, 3, "uniformMatrix4fv") &&
+                validUniform(args)) {
+              const auto values = readNumericArray<float>(args[2]);
+              capturedContext->uniformMatrix4fv(
+                  static_cast<int32_t>(unwrapGLObject(args[0])),
+                  static_cast<int32_t>(values.size() / 16),
+                  g_engine->toBoolean(args[1]), values.data());
             }
             return g_engine->newUndefined();
           }));
@@ -504,6 +1155,31 @@ js::JSValueHandle createContextJSObject(js::Engine *engine, uint32_t width,
               capturedContext->drawArrays(toUint32(args[0]), toInt32(args[1]),
                                           toInt32(args[2]));
             }
+            return g_engine->newUndefined();
+          }));
+  engine->setProperty(
+      gl, "drawElements",
+      engine->newFunction(
+          "drawElements",
+          [capturedContext](void *,
+                            const std::vector<js::JSValueHandle> &args) {
+            if (requireArguments(args, 4, "drawElements"))
+              capturedContext->drawElements(
+                  toUint32(args[0]), toInt32(args[1]), toUint32(args[2]),
+                  static_cast<size_t>(g_engine->toNumber(args[3])));
+            return g_engine->newUndefined();
+          }));
+  engine->setProperty(
+      gl, "drawElementsInstanced",
+      engine->newFunction(
+          "drawElementsInstanced",
+          [capturedContext](void *,
+                            const std::vector<js::JSValueHandle> &args) {
+            if (requireArguments(args, 5, "drawElementsInstanced"))
+              capturedContext->drawElementsInstanced(
+                  toUint32(args[0]), toInt32(args[1]), toUint32(args[2]),
+                  static_cast<size_t>(g_engine->toNumber(args[3])),
+                  toInt32(args[4]));
             return g_engine->newUndefined();
           }));
   engine->setProperty(
@@ -572,6 +1248,17 @@ js::JSValueHandle createContextJSObject(js::Engine *engine, uint32_t width,
             case GL_SHADING_LANGUAGE_VERSION:
               return g_engine->newString(
                   capturedContext->shadingLanguageVersion().c_str());
+            case GL_SCISSOR_BOX:
+            case GL_VIEWPORT: {
+              const auto values =
+                  capturedContext->getIntegers(toUint32(args[0]), 4);
+              auto result = g_engine->newArray(values.size());
+              for (uint32_t index = 0; index < values.size(); ++index) {
+                g_engine->setPropertyIndex(result, index,
+                                           g_engine->newNumber(values[index]));
+              }
+              return result;
+            }
             default:
               return g_engine->newNumber(
                   capturedContext->getInteger(toUint32(args[0])));
@@ -618,6 +1305,10 @@ js::JSValueHandle createContextJSObject(js::Engine *engine, uint32_t width,
                             return g_engine->newBoolean(false);
                           }));
 
+  auto setPrototype = engine->getGlobalProperty("__mystralSetWebGL2Prototype");
+  if (engine->isFunction(setPrototype)) {
+    engine->call(setPrototype, engine->newUndefined(), {gl});
+  }
   return gl;
 }
 

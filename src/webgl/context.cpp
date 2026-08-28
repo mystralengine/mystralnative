@@ -3,6 +3,7 @@
 #if defined(_WIN32) && defined(MYSTRAL_HAS_WEBGL)
 
 #define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
 #include <windows.h>
 
 #define EGL_EGL_PROTOTYPES 0
@@ -12,6 +13,7 @@
 #include <EGL/eglext_angle.h>
 #include <GLES3/gl3.h>
 
+#include <algorithm>
 #include <iomanip>
 #include <sstream>
 
@@ -76,31 +78,77 @@ struct Context::Impl {
   PFNEGLGETERRORPROC eglGetError = nullptr;
 
   PFNGLGETSTRINGPROC glGetString = nullptr;
-  PFNGLCREATESHADERPROC glCreateShader = nullptr;
-  PFNGLSHADERSOURCEPROC glShaderSource = nullptr;
-  PFNGLCOMPILESHADERPROC glCompileShader = nullptr;
-  PFNGLGETSHADERIVPROC glGetShaderiv = nullptr;
-  PFNGLGETSHADERINFOLOGPROC glGetShaderInfoLog = nullptr;
-  PFNGLCREATEPROGRAMPROC glCreateProgram = nullptr;
+  PFNGLACTIVETEXTUREPROC glActiveTexture = nullptr;
   PFNGLATTACHSHADERPROC glAttachShader = nullptr;
-  PFNGLLINKPROGRAMPROC glLinkProgram = nullptr;
-  PFNGLGETPROGRAMIVPROC glGetProgramiv = nullptr;
-  PFNGLGETPROGRAMINFOLOGPROC glGetProgramInfoLog = nullptr;
-  PFNGLUSEPROGRAMPROC glUseProgram = nullptr;
-  PFNGLGENBUFFERSPROC glGenBuffers = nullptr;
   PFNGLBINDBUFFERPROC glBindBuffer = nullptr;
+  PFNGLBINDFRAMEBUFFERPROC glBindFramebuffer = nullptr;
+  PFNGLBINDRENDERBUFFERPROC glBindRenderbuffer = nullptr;
+  PFNGLBINDTEXTUREPROC glBindTexture = nullptr;
+  PFNGLBINDVERTEXARRAYPROC glBindVertexArray = nullptr;
   PFNGLBUFFERDATAPROC glBufferData = nullptr;
-  PFNGLGETATTRIBLOCATIONPROC glGetAttribLocation = nullptr;
+  PFNGLCLEARPROC glClear = nullptr;
+  PFNGLCLEARCOLORPROC glClearColor = nullptr;
+  PFNGLCLEARDEPTHFPROC glClearDepthf = nullptr;
+  PFNGLCLEARSTENCILPROC glClearStencil = nullptr;
+  PFNGLCOLORMASKPROC glColorMask = nullptr;
+  PFNGLCOMPILESHADERPROC glCompileShader = nullptr;
+  PFNGLCREATEPROGRAMPROC glCreateProgram = nullptr;
+  PFNGLCREATESHADERPROC glCreateShader = nullptr;
+  PFNGLCULLFACEPROC glCullFace = nullptr;
+  PFNGLDELETESHADERPROC glDeleteShader = nullptr;
+  PFNGLDEPTHFUNCPROC glDepthFunc = nullptr;
+  PFNGLDEPTHMASKPROC glDepthMask = nullptr;
+  PFNGLDISABLEPROC glDisable = nullptr;
+  PFNGLDRAWBUFFERSPROC glDrawBuffers = nullptr;
+  PFNGLDRAWARRAYSPROC glDrawArrays = nullptr;
+  PFNGLDRAWELEMENTSPROC glDrawElements = nullptr;
+  PFNGLDRAWELEMENTSINSTANCEDPROC glDrawElementsInstanced = nullptr;
+  PFNGLENABLEPROC glEnable = nullptr;
   PFNGLENABLEVERTEXATTRIBARRAYPROC glEnableVertexAttribArray = nullptr;
+  PFNGLFINISHPROC glFinish = nullptr;
+  PFNGLFRAMEBUFFERRENDERBUFFERPROC glFramebufferRenderbuffer = nullptr;
+  PFNGLFRAMEBUFFERTEXTURE2DPROC glFramebufferTexture2D = nullptr;
+  PFNGLFRONTFACEPROC glFrontFace = nullptr;
+  PFNGLGENBUFFERSPROC glGenBuffers = nullptr;
+  PFNGLGENFRAMEBUFFERSPROC glGenFramebuffers = nullptr;
+  PFNGLGENRENDERBUFFERSPROC glGenRenderbuffers = nullptr;
+  PFNGLGENTEXTURESPROC glGenTextures = nullptr;
+  PFNGLGENVERTEXARRAYSPROC glGenVertexArrays = nullptr;
+  PFNGLGETACTIVEATTRIBPROC glGetActiveAttrib = nullptr;
+  PFNGLGETACTIVEUNIFORMPROC glGetActiveUniform = nullptr;
+  PFNGLGETATTRIBLOCATIONPROC glGetAttribLocation = nullptr;
+  PFNGLGETERRORPROC glGetError = nullptr;
+  PFNGLGETINTEGERVPROC glGetIntegerv = nullptr;
+  PFNGLGETPROGRAMINFOLOGPROC glGetProgramInfoLog = nullptr;
+  PFNGLGETPROGRAMIVPROC glGetProgramiv = nullptr;
+  PFNGLGETSHADERINFOLOGPROC glGetShaderInfoLog = nullptr;
+  PFNGLGETSHADERIVPROC glGetShaderiv = nullptr;
+  PFNGLGETSHADERPRECISIONFORMATPROC glGetShaderPrecisionFormat = nullptr;
+  PFNGLGETUNIFORMLOCATIONPROC glGetUniformLocation = nullptr;
+  PFNGLLINKPROGRAMPROC glLinkProgram = nullptr;
+  PFNGLPIXELSTOREIPROC glPixelStorei = nullptr;
+  PFNGLREADPIXELSPROC glReadPixels = nullptr;
+  PFNGLRENDERBUFFERSTORAGEPROC glRenderbufferStorage = nullptr;
+  PFNGLSCISSORPROC glScissor = nullptr;
+  PFNGLSHADERSOURCEPROC glShaderSource = nullptr;
+  PFNGLSTENCILMASKPROC glStencilMask = nullptr;
+  PFNGLTEXIMAGE2DPROC glTexImage2D = nullptr;
+  PFNGLTEXIMAGE3DPROC glTexImage3D = nullptr;
+  PFNGLTEXPARAMETERIPROC glTexParameteri = nullptr;
+  PFNGLTEXSTORAGE2DPROC glTexStorage2D = nullptr;
+  PFNGLTEXSUBIMAGE2DPROC glTexSubImage2D = nullptr;
+  PFNGLUNIFORM1FPROC glUniform1f = nullptr;
+  PFNGLUNIFORM1IPROC glUniform1i = nullptr;
+  PFNGLUNIFORM1IVPROC glUniform1iv = nullptr;
+  PFNGLUNIFORM2FPROC glUniform2f = nullptr;
+  PFNGLUNIFORM3FPROC glUniform3f = nullptr;
+  PFNGLUNIFORM3FVPROC glUniform3fv = nullptr;
+  PFNGLUNIFORMMATRIX3FVPROC glUniformMatrix3fv = nullptr;
+  PFNGLUNIFORMMATRIX4FVPROC glUniformMatrix4fv = nullptr;
+  PFNGLUSEPROGRAMPROC glUseProgram = nullptr;
+  PFNGLVERTEXATTRIBDIVISORPROC glVertexAttribDivisor = nullptr;
   PFNGLVERTEXATTRIBPOINTERPROC glVertexAttribPointer = nullptr;
   PFNGLVIEWPORTPROC glViewport = nullptr;
-  PFNGLCLEARCOLORPROC glClearColor = nullptr;
-  PFNGLCLEARPROC glClear = nullptr;
-  PFNGLDRAWARRAYSPROC glDrawArrays = nullptr;
-  PFNGLFINISHPROC glFinish = nullptr;
-  PFNGLREADPIXELSPROC glReadPixels = nullptr;
-  PFNGLGETINTEGERVPROC glGetIntegerv = nullptr;
-  PFNGLGETERRORPROC glGetError = nullptr;
 
   template <typename Function> Function loadEGL(const char *name) {
     auto function = reinterpret_cast<Function>(GetProcAddress(eglModule, name));
@@ -170,41 +218,88 @@ struct Context::Impl {
   bool loadGLESFunctions() {
 #define LOAD_GL(name) name = loadGLES<decltype(name)>(#name)
     LOAD_GL(glGetString);
-    LOAD_GL(glCreateShader);
-    LOAD_GL(glShaderSource);
-    LOAD_GL(glCompileShader);
-    LOAD_GL(glGetShaderiv);
-    LOAD_GL(glGetShaderInfoLog);
-    LOAD_GL(glCreateProgram);
+    LOAD_GL(glActiveTexture);
     LOAD_GL(glAttachShader);
-    LOAD_GL(glLinkProgram);
-    LOAD_GL(glGetProgramiv);
-    LOAD_GL(glGetProgramInfoLog);
-    LOAD_GL(glUseProgram);
-    LOAD_GL(glGenBuffers);
     LOAD_GL(glBindBuffer);
+    LOAD_GL(glBindFramebuffer);
+    LOAD_GL(glBindRenderbuffer);
+    LOAD_GL(glBindTexture);
+    LOAD_GL(glBindVertexArray);
     LOAD_GL(glBufferData);
-    LOAD_GL(glGetAttribLocation);
+    LOAD_GL(glClear);
+    LOAD_GL(glClearColor);
+    LOAD_GL(glClearDepthf);
+    LOAD_GL(glClearStencil);
+    LOAD_GL(glColorMask);
+    LOAD_GL(glCompileShader);
+    LOAD_GL(glCreateProgram);
+    LOAD_GL(glCreateShader);
+    LOAD_GL(glCullFace);
+    LOAD_GL(glDeleteShader);
+    LOAD_GL(glDepthFunc);
+    LOAD_GL(glDepthMask);
+    LOAD_GL(glDisable);
+    LOAD_GL(glDrawBuffers);
+    LOAD_GL(glDrawArrays);
+    LOAD_GL(glDrawElements);
+    LOAD_GL(glDrawElementsInstanced);
+    LOAD_GL(glEnable);
     LOAD_GL(glEnableVertexAttribArray);
+    LOAD_GL(glFinish);
+    LOAD_GL(glFramebufferRenderbuffer);
+    LOAD_GL(glFramebufferTexture2D);
+    LOAD_GL(glFrontFace);
+    LOAD_GL(glGenBuffers);
+    LOAD_GL(glGenFramebuffers);
+    LOAD_GL(glGenRenderbuffers);
+    LOAD_GL(glGenTextures);
+    LOAD_GL(glGenVertexArrays);
+    LOAD_GL(glGetActiveAttrib);
+    LOAD_GL(glGetActiveUniform);
+    LOAD_GL(glGetAttribLocation);
+    LOAD_GL(glGetError);
+    LOAD_GL(glGetIntegerv);
+    LOAD_GL(glGetProgramInfoLog);
+    LOAD_GL(glGetProgramiv);
+    LOAD_GL(glGetShaderInfoLog);
+    LOAD_GL(glGetShaderiv);
+    LOAD_GL(glGetShaderPrecisionFormat);
+    LOAD_GL(glGetUniformLocation);
+    LOAD_GL(glLinkProgram);
+    LOAD_GL(glPixelStorei);
+    LOAD_GL(glReadPixels);
+    LOAD_GL(glRenderbufferStorage);
+    LOAD_GL(glScissor);
+    LOAD_GL(glShaderSource);
+    LOAD_GL(glStencilMask);
+    LOAD_GL(glTexImage2D);
+    LOAD_GL(glTexImage3D);
+    LOAD_GL(glTexParameteri);
+    LOAD_GL(glTexStorage2D);
+    LOAD_GL(glTexSubImage2D);
+    LOAD_GL(glUniform1f);
+    LOAD_GL(glUniform1i);
+    LOAD_GL(glUniform1iv);
+    LOAD_GL(glUniform2f);
+    LOAD_GL(glUniform3f);
+    LOAD_GL(glUniform3fv);
+    LOAD_GL(glUniformMatrix3fv);
+    LOAD_GL(glUniformMatrix4fv);
+    LOAD_GL(glUseProgram);
+    LOAD_GL(glVertexAttribDivisor);
     LOAD_GL(glVertexAttribPointer);
     LOAD_GL(glViewport);
-    LOAD_GL(glClearColor);
-    LOAD_GL(glClear);
-    LOAD_GL(glDrawArrays);
-    LOAD_GL(glFinish);
-    LOAD_GL(glReadPixels);
-    LOAD_GL(glGetIntegerv);
-    LOAD_GL(glGetError);
 #undef LOAD_GL
 
     return glGetString && glCreateShader && glShaderSource && glCompileShader &&
-           glGetShaderiv && glGetShaderInfoLog && glCreateProgram &&
-           glAttachShader && glLinkProgram && glGetProgramiv &&
-           glGetProgramInfoLog && glUseProgram && glGenBuffers &&
-           glBindBuffer && glBufferData && glGetAttribLocation &&
-           glEnableVertexAttribArray && glVertexAttribPointer && glViewport &&
-           glClearColor && glClear && glDrawArrays && glFinish &&
-           glReadPixels && glGetIntegerv && glGetError;
+           glGetShaderiv && glGetShaderInfoLog && glGetShaderPrecisionFormat &&
+           glCreateProgram && glAttachShader && glLinkProgram &&
+           glGetProgramiv && glGetProgramInfoLog && glUseProgram &&
+           glGenBuffers && glBindBuffer && glBufferData &&
+           glGetAttribLocation && glEnableVertexAttribArray &&
+           glVertexAttribPointer && glViewport && glClearColor && glClear &&
+           glDrawArrays && glFinish && glReadPixels && glGetIntegerv &&
+           glGetError;
   }
 };
 
@@ -431,6 +526,15 @@ std::string Context::getShaderInfoLog(uint32_t shader) {
   result.resize(static_cast<size_t>(written));
   return result;
 }
+ShaderPrecisionFormat
+Context::getShaderPrecisionFormat(uint32_t shaderType, uint32_t precisionType) {
+  makeCurrent();
+  GLint range[2] = {};
+  GLint precision = 0;
+  impl_->glGetShaderPrecisionFormat(shaderType, precisionType, range,
+                                    &precision);
+  return {range[0], range[1], precision};
+}
 
 uint32_t Context::createProgram() {
   makeCurrent();
@@ -466,6 +570,34 @@ void Context::useProgram(uint32_t program) {
   makeCurrent();
   impl_->glUseProgram(program);
 }
+ActiveInfo Context::getActiveAttrib(uint32_t program, uint32_t index) {
+  makeCurrent();
+  GLint maxLength = 0;
+  impl_->glGetProgramiv(program, GL_ACTIVE_ATTRIBUTE_MAX_LENGTH, &maxLength);
+  std::vector<char> name(static_cast<size_t>(std::max(maxLength, 1)));
+  GLsizei length = 0;
+  GLint size = 0;
+  GLenum type = 0;
+  impl_->glGetActiveAttrib(program, index, maxLength, &length, &size, &type,
+                           name.data());
+  return {std::string(name.data(), static_cast<size_t>(length)), size, type};
+}
+ActiveInfo Context::getActiveUniform(uint32_t program, uint32_t index) {
+  makeCurrent();
+  GLint maxLength = 0;
+  impl_->glGetProgramiv(program, GL_ACTIVE_UNIFORM_MAX_LENGTH, &maxLength);
+  std::vector<char> name(static_cast<size_t>(std::max(maxLength, 1)));
+  GLsizei length = 0;
+  GLint size = 0;
+  GLenum type = 0;
+  impl_->glGetActiveUniform(program, index, maxLength, &length, &size, &type,
+                            name.data());
+  return {std::string(name.data(), static_cast<size_t>(length)), size, type};
+}
+int32_t Context::getUniformLocation(uint32_t program, const std::string &name) {
+  makeCurrent();
+  return impl_->glGetUniformLocation(program, name.c_str());
+}
 
 uint32_t Context::createBuffer() {
   makeCurrent();
@@ -481,6 +613,46 @@ void Context::bufferData(uint32_t target, size_t size, const void *data,
                          uint32_t usage) {
   makeCurrent();
   impl_->glBufferData(target, static_cast<GLsizeiptr>(size), data, usage);
+}
+uint32_t Context::createFramebuffer() {
+  makeCurrent();
+  GLuint value = 0;
+  impl_->glGenFramebuffers(1, &value);
+  return value;
+}
+void Context::bindFramebuffer(uint32_t target, uint32_t framebuffer) {
+  makeCurrent();
+  impl_->glBindFramebuffer(target, framebuffer);
+}
+uint32_t Context::createRenderbuffer() {
+  makeCurrent();
+  GLuint value = 0;
+  impl_->glGenRenderbuffers(1, &value);
+  return value;
+}
+void Context::bindRenderbuffer(uint32_t target, uint32_t renderbuffer) {
+  makeCurrent();
+  impl_->glBindRenderbuffer(target, renderbuffer);
+}
+uint32_t Context::createTexture() {
+  makeCurrent();
+  GLuint value = 0;
+  impl_->glGenTextures(1, &value);
+  return value;
+}
+void Context::bindTexture(uint32_t target, uint32_t texture) {
+  makeCurrent();
+  impl_->glBindTexture(target, texture);
+}
+uint32_t Context::createVertexArray() {
+  makeCurrent();
+  GLuint value = 0;
+  impl_->glGenVertexArrays(1, &value);
+  return value;
+}
+void Context::bindVertexArray(uint32_t vertexArray) {
+  makeCurrent();
+  impl_->glBindVertexArray(vertexArray);
 }
 
 int32_t Context::getAttribLocation(uint32_t program, const std::string &name) {
@@ -499,6 +671,170 @@ void Context::vertexAttribPointer(uint32_t index, int32_t size, uint32_t type,
                                normalized ? GL_TRUE : GL_FALSE, stride,
                                reinterpret_cast<const void *>(offset));
 }
+void Context::vertexAttribDivisor(uint32_t index, uint32_t divisor) {
+  makeCurrent();
+  impl_->glVertexAttribDivisor(index, divisor);
+}
+
+void Context::activeTexture(uint32_t texture) {
+  makeCurrent();
+  impl_->glActiveTexture(texture);
+}
+void Context::clearDepth(float depth) {
+  makeCurrent();
+  impl_->glClearDepthf(depth);
+}
+void Context::clearStencil(int32_t stencil) {
+  makeCurrent();
+  impl_->glClearStencil(stencil);
+}
+void Context::colorMask(bool red, bool green, bool blue, bool alpha) {
+  makeCurrent();
+  impl_->glColorMask(red ? GL_TRUE : GL_FALSE, green ? GL_TRUE : GL_FALSE,
+                     blue ? GL_TRUE : GL_FALSE, alpha ? GL_TRUE : GL_FALSE);
+}
+void Context::cullFace(uint32_t mode) {
+  makeCurrent();
+  impl_->glCullFace(mode);
+}
+void Context::deleteShader(uint32_t shader) {
+  makeCurrent();
+  impl_->glDeleteShader(shader);
+}
+void Context::depthFunc(uint32_t function) {
+  makeCurrent();
+  impl_->glDepthFunc(function);
+}
+void Context::depthMask(bool enabled) {
+  makeCurrent();
+  impl_->glDepthMask(enabled ? GL_TRUE : GL_FALSE);
+}
+void Context::disable(uint32_t capability) {
+  makeCurrent();
+  impl_->glDisable(capability);
+}
+void Context::enable(uint32_t capability) {
+  makeCurrent();
+  impl_->glEnable(capability);
+}
+void Context::frontFace(uint32_t mode) {
+  makeCurrent();
+  impl_->glFrontFace(mode);
+}
+void Context::pixelStorei(uint32_t parameter, int32_t value) {
+  makeCurrent();
+  // These three WebGL-only settings are handled during image unpacking. Typed
+  // array uploads need no conversion when they retain their default values.
+  if (parameter == 0x9240 || parameter == 0x9241 || parameter == 0x9243) {
+    return;
+  }
+  impl_->glPixelStorei(parameter, value);
+}
+void Context::scissor(int32_t x, int32_t y, int32_t width, int32_t height) {
+  makeCurrent();
+  impl_->glScissor(x, y, width, height);
+}
+void Context::stencilMask(uint32_t mask) {
+  makeCurrent();
+  impl_->glStencilMask(mask);
+}
+
+void Context::framebufferRenderbuffer(uint32_t target, uint32_t attachment,
+                                      uint32_t renderbufferTarget,
+                                      uint32_t renderbuffer) {
+  makeCurrent();
+  impl_->glFramebufferRenderbuffer(target, attachment, renderbufferTarget,
+                                   renderbuffer);
+}
+void Context::framebufferTexture2D(uint32_t target, uint32_t attachment,
+                                   uint32_t textureTarget, uint32_t texture,
+                                   int32_t level) {
+  makeCurrent();
+  impl_->glFramebufferTexture2D(target, attachment, textureTarget, texture,
+                                level);
+}
+void Context::renderbufferStorage(uint32_t target, uint32_t internalFormat,
+                                  int32_t width, int32_t height) {
+  makeCurrent();
+  impl_->glRenderbufferStorage(target, internalFormat, width, height);
+}
+void Context::drawBuffers(const std::vector<uint32_t> &buffers) {
+  makeCurrent();
+  impl_->glDrawBuffers(static_cast<GLsizei>(buffers.size()), buffers.data());
+}
+
+void Context::texImage2D(uint32_t target, int32_t level, int32_t internalFormat,
+                         int32_t width, int32_t height, int32_t border,
+                         uint32_t format, uint32_t type, const void *pixels) {
+  makeCurrent();
+  impl_->glTexImage2D(target, level, internalFormat, width, height, border,
+                      format, type, pixels);
+}
+void Context::texImage3D(uint32_t target, int32_t level, int32_t internalFormat,
+                         int32_t width, int32_t height, int32_t depth,
+                         int32_t border, uint32_t format, uint32_t type,
+                         const void *pixels) {
+  makeCurrent();
+  impl_->glTexImage3D(target, level, internalFormat, width, height, depth,
+                      border, format, type, pixels);
+}
+void Context::texParameteri(uint32_t target, uint32_t parameter,
+                            int32_t value) {
+  makeCurrent();
+  impl_->glTexParameteri(target, parameter, value);
+}
+void Context::texStorage2D(uint32_t target, int32_t levels,
+                           uint32_t internalFormat, int32_t width,
+                           int32_t height) {
+  makeCurrent();
+  impl_->glTexStorage2D(target, levels, internalFormat, width, height);
+}
+void Context::texSubImage2D(uint32_t target, int32_t level, int32_t xOffset,
+                            int32_t yOffset, int32_t width, int32_t height,
+                            uint32_t format, uint32_t type,
+                            const void *pixels) {
+  makeCurrent();
+  impl_->glTexSubImage2D(target, level, xOffset, yOffset, width, height, format,
+                         type, pixels);
+}
+
+void Context::uniform1f(int32_t location, float x) {
+  makeCurrent();
+  impl_->glUniform1f(location, x);
+}
+void Context::uniform1i(int32_t location, int32_t x) {
+  makeCurrent();
+  impl_->glUniform1i(location, x);
+}
+void Context::uniform1iv(int32_t location, int32_t count,
+                         const int32_t *values) {
+  makeCurrent();
+  impl_->glUniform1iv(location, count, values);
+}
+void Context::uniform2f(int32_t location, float x, float y) {
+  makeCurrent();
+  impl_->glUniform2f(location, x, y);
+}
+void Context::uniform3f(int32_t location, float x, float y, float z) {
+  makeCurrent();
+  impl_->glUniform3f(location, x, y, z);
+}
+void Context::uniform3fv(int32_t location, int32_t count, const float *values) {
+  makeCurrent();
+  impl_->glUniform3fv(location, count, values);
+}
+void Context::uniformMatrix3fv(int32_t location, int32_t count, bool transpose,
+                               const float *values) {
+  makeCurrent();
+  impl_->glUniformMatrix3fv(location, count, transpose ? GL_TRUE : GL_FALSE,
+                            values);
+}
+void Context::uniformMatrix4fv(int32_t location, int32_t count, bool transpose,
+                               const float *values) {
+  makeCurrent();
+  impl_->glUniformMatrix4fv(location, count, transpose ? GL_TRUE : GL_FALSE,
+                            values);
+}
 
 void Context::viewport(int32_t x, int32_t y, int32_t width, int32_t height) {
   makeCurrent();
@@ -516,6 +852,18 @@ void Context::drawArrays(uint32_t mode, int32_t first, int32_t count) {
   makeCurrent();
   impl_->glDrawArrays(mode, first, count);
 }
+void Context::drawElements(uint32_t mode, int32_t count, uint32_t type,
+                           size_t offset) {
+  makeCurrent();
+  impl_->glDrawElements(mode, count, type,
+                        reinterpret_cast<const void *>(offset));
+}
+void Context::drawElementsInstanced(uint32_t mode, int32_t count, uint32_t type,
+                                    size_t offset, int32_t instanceCount) {
+  makeCurrent();
+  impl_->glDrawElementsInstanced(
+      mode, count, type, reinterpret_cast<const void *>(offset), instanceCount);
+}
 void Context::finish() {
   makeCurrent();
   impl_->glFinish();
@@ -530,6 +878,12 @@ int32_t Context::getInteger(uint32_t parameter) {
   GLint value = 0;
   impl_->glGetIntegerv(parameter, &value);
   return value;
+}
+std::vector<int32_t> Context::getIntegers(uint32_t parameter, size_t count) {
+  makeCurrent();
+  std::vector<int32_t> values(count);
+  impl_->glGetIntegerv(parameter, values.data());
+  return values;
 }
 uint32_t Context::getError() {
   makeCurrent();

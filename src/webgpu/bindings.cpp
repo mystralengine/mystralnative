@@ -432,6 +432,7 @@ bool initBindings(js::Engine* engine, void* wgpuInstance, void* wgpuDevice, void
     engine->setProperty(canvasObject, "height", engine->newNumber(g_canvasHeight));
     engine->setProperty(canvasObject, "clientWidth", engine->newNumber(g_canvasWidth));
     engine->setProperty(canvasObject, "clientHeight", engine->newNumber(g_canvasHeight));
+    engine->setProperty(canvasObject, "dataset", engine->newObject());
 
     // canvas.parentElement - mock parent element (for Debugger compatibility)
     engine->setProperty(canvasObject, "parentElement", parentElement);
@@ -651,6 +652,7 @@ bool initBindings(js::Engine* engine, void* wgpuInstance, void* wgpuDevice, void
 
             // Add basic DOM element properties
             g_engine->setProperty(element, "style", g_engine->newObject());
+            g_engine->setProperty(element, "dataset", g_engine->newObject());
             g_engine->setProperty(element, "className", g_engine->newString(""));
             g_engine->setProperty(element, "innerHTML", g_engine->newString(""));
             g_engine->setProperty(element, "textContent", g_engine->newString(""));
@@ -966,6 +968,18 @@ bool initBindings(js::Engine* engine, void* wgpuInstance, void* wgpuDevice, void
             }
 
             return element;
+        })
+    );
+
+    // DOM libraries such as Three.js create canvases through the HTML namespace.
+    engine->setProperty(existingDocument, "createElementNS",
+        engine->newFunction("createElementNS", [](void* ctx, const std::vector<js::JSValueHandle>& args) {
+            if (args.size() < 2) {
+                return g_engine->newNull();
+            }
+            auto document = g_engine->getGlobalProperty("document");
+            auto createElement = g_engine->getProperty(document, "createElement");
+            return g_engine->call(createElement, document, {args[1]});
         })
     );
 

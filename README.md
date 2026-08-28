@@ -110,7 +110,7 @@ cmake --build build --config Release
 .\build\Release\mystral.exe run examples\webgl2-triangle.js
 ```
 
-The current milestone supports WebGL 2 context creation, shaders, vertex buffers, drawing, GPU completion, pixel readback, and automatic SDL window presentation through ANGLE/D3D11. The first WebGL context owns the native window surface; full WebGL API coverage and multi-canvas compositing remain in progress.
+The current milestone supports WebGL 2 context creation, shaders, buffers, textures, framebuffers, uniforms, instancing, GPU completion, pixel readback, and automatic SDL window presentation through ANGLE/D3D11. The observed API surface of an unchanged Three.js r181 texture, shadow, render-target, and instancing workload is covered. The first WebGL context owns the native window surface; full WebGL IDL coverage and multi-canvas compositing remain in progress.
 
 ## What Can You Build?
 
