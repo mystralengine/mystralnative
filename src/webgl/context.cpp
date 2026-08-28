@@ -457,6 +457,8 @@ void Context::shutdown() {
   }
   impl_->surface = EGL_NO_SURFACE;
   impl_->context = EGL_NO_CONTEXT;
+  impl_->display = EGL_NO_DISPLAY;
+  impl_->config = nullptr;
   impl_->initialized = false;
   impl_->windowSurface = false;
 
