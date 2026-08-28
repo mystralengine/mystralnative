@@ -12,6 +12,7 @@
 #endif
 #include "mystral/http/http_client.h"
 #include "mystral/http/async_http_client.h"
+#include "mystral/websocket/client.h"
 #include "mystral/webtransport/webtransport.h"
 #include "mystral/fs/async_file.h"
 #include "mystral/fs/file_watcher.h"
@@ -49,6 +50,7 @@
 #include <memory>
 #include <vector>
 #include <functional>
+#include <unordered_map>
 #include <unordered_set>
 #include <queue>
 #include <mutex>
@@ -417,8 +419,9 @@ public:
         // Set up Node.js-compatible process object (process.exit, etc.)
         setupProcess();
 
-        // Set up fetch API
+        // Set up fetch and WebSocket APIs
         setupFetch();
+        setupWebSocket();
 
         // Set up WebTransport API (QUIC/HTTP3 via quiche; stubbed if not built)
         webtransport::initBindings(jsEngine_.get());
@@ -508,6 +511,15 @@ public:
 #ifdef MYSTRAL_HAS_RAYTRACING
         rt::cleanupRTBindings();
 #endif
+
+        // Stop WebSocket worker threads before libcurl is shut down by the HTTP client.
+        websocket::getClientManager().shutdown();
+        if (jsEngine_) {
+            for (auto& [id, callback] : webSocketCallbacks_) {
+                jsEngine_->unprotect(callback);
+            }
+        }
+        webSocketCallbacks_.clear();
 
         // Shutdown async HTTP client (cancels pending requests)
         http::getAsyncHttpClient().shutdown();
@@ -789,7 +801,8 @@ public:
         // This must be called after runOnce() to invoke callbacks safely on the main thread
         http::getAsyncHttpClient().processCompletedRequests();
 
-        // Drive WebTransport QUIC sessions and dispatch their JS events (main thread)
+        // Dispatch WebSocket and WebTransport events on the JavaScript main thread.
+        processWebSocketEvents();
         webtransport::processEvents();
 
         // Process completed async file reads (queues their callbacks)
@@ -2663,6 +2676,221 @@ if (typeof globalThis.XMLHttpRequest === 'undefined') {
         std::cout << "[Mystral] Web Streams API initialized (ReadableStream/WritableStream/TransformStream)" << std::endl;
     }
 
+    void setupWebSocket() {
+        if (!jsEngine_) return;
+
+        jsEngine_->setGlobalProperty("__webSocketConnect",
+            jsEngine_->newFunction("__webSocketConnect", [this](void*, const std::vector<js::JSValueHandle>& args) {
+                if (args.size() < 3 || !jsEngine_->isFunction(args[2])) {
+                    jsEngine_->throwException("WebSocket connect requires a URL, protocols, and callback");
+                    return jsEngine_->newUndefined();
+                }
+                std::string url = jsEngine_->toString(args[0]);
+                std::vector<std::string> protocols;
+                if (jsEngine_->isArray(args[1])) {
+                    auto lengthValue = jsEngine_->getProperty(args[1], "length");
+                    auto length = static_cast<uint32_t>(jsEngine_->toNumber(lengthValue));
+                    protocols.reserve(length);
+                    for (uint32_t index = 0; index < length; ++index) {
+                        protocols.push_back(jsEngine_->toString(jsEngine_->getPropertyIndex(args[1], index)));
+                    }
+                }
+                auto callback = args[2];
+                jsEngine_->protect(callback);
+                uint64_t id = websocket::getClientManager().connect(url, protocols);
+                webSocketCallbacks_[id] = callback;
+                return jsEngine_->newNumber(static_cast<double>(id));
+            })
+        );
+
+        jsEngine_->setGlobalProperty("__webSocketSend",
+            jsEngine_->newFunction("__webSocketSend", [this](void*, const std::vector<js::JSValueHandle>& args) {
+                if (args.size() < 3) return jsEngine_->newBoolean(false);
+                uint64_t id = static_cast<uint64_t>(jsEngine_->toNumber(args[0]));
+                bool binary = jsEngine_->toBoolean(args[2]);
+                std::vector<uint8_t> data;
+                if (jsEngine_->isString(args[1])) {
+                    std::string text = jsEngine_->toString(args[1]);
+                    data.assign(text.begin(), text.end());
+                    binary = false;
+                } else {
+                    size_t size = 0;
+                    void* source = jsEngine_->getArrayBufferData(args[1], &size);
+                    if (!source && size > 0) return jsEngine_->newBoolean(false);
+                    if (size > 0) {
+                        auto* bytes = static_cast<uint8_t*>(source);
+                        data.assign(bytes, bytes + size);
+                    }
+                }
+                return jsEngine_->newBoolean(websocket::getClientManager().send(id, std::move(data), binary));
+            })
+        );
+
+        jsEngine_->setGlobalProperty("__webSocketClose",
+            jsEngine_->newFunction("__webSocketClose", [this](void*, const std::vector<js::JSValueHandle>& args) {
+                if (args.empty()) return jsEngine_->newUndefined();
+                uint64_t id = static_cast<uint64_t>(jsEngine_->toNumber(args[0]));
+                uint16_t code = args.size() > 1 ? static_cast<uint16_t>(jsEngine_->toNumber(args[1])) : 1000;
+                std::string reason = args.size() > 2 ? jsEngine_->toString(args[2]) : std::string{};
+                websocket::getClientManager().close(id, code, reason);
+                return jsEngine_->newUndefined();
+            })
+        );
+
+        const char* webSocketPolyfill = R"WEBSOCKET(
+(function () {
+    if (typeof globalThis.WebSocket !== 'undefined') return;
+
+    class WebSocket {
+        static CONNECTING = 0;
+        static OPEN = 1;
+        static CLOSING = 2;
+        static CLOSED = 3;
+
+        constructor(url, protocols = []) {
+            this.url = String(url);
+            this.readyState = WebSocket.CONNECTING;
+            this.bufferedAmount = 0;
+            this.extensions = '';
+            this.protocol = '';
+            this.binaryType = 'blob';
+            this.onopen = null;
+            this.onmessage = null;
+            this.onerror = null;
+            this.onclose = null;
+            this._listeners = new Map();
+
+            const protocolList = typeof protocols === 'string' ? [protocols] : Array.from(protocols || [], String);
+            if (new Set(protocolList).size !== protocolList.length) {
+                throw new Error('SyntaxError: duplicate WebSocket protocol');
+            }
+            this._id = __webSocketConnect(this.url, protocolList, event => this._handleNativeEvent(event));
+        }
+
+        addEventListener(type, callback) {
+            if (typeof callback !== 'function') return;
+            const listeners = this._listeners.get(type) || [];
+            listeners.push(callback);
+            this._listeners.set(type, listeners);
+        }
+
+        removeEventListener(type, callback) {
+            const listeners = this._listeners.get(type) || [];
+            this._listeners.set(type, listeners.filter(listener => listener !== callback));
+        }
+
+        dispatchEvent(event) {
+            event.target = this;
+            event.currentTarget = this;
+            const handler = this['on' + event.type];
+            if (typeof handler === 'function') handler.call(this, event);
+            for (const listener of this._listeners.get(event.type) || []) listener.call(this, event);
+            return true;
+        }
+
+        _handleNativeEvent(event) {
+            if (event.type === 'open') {
+                this.readyState = WebSocket.OPEN;
+                this.protocol = event.protocol || '';
+                this.dispatchEvent({ type: 'open' });
+                return;
+            }
+            if (event.type === 'message') {
+                let data = event.data;
+                if (event.binary && this.binaryType === 'blob') data = new Blob([data]);
+                this.dispatchEvent({ type: 'message', data, origin: this.url, lastEventId: '' });
+                return;
+            }
+            if (event.type === 'error') {
+                this.dispatchEvent({ type: 'error', message: event.message || 'WebSocket error' });
+                return;
+            }
+            if (event.type === 'close') {
+                this.readyState = WebSocket.CLOSED;
+                this.dispatchEvent({
+                    type: 'close',
+                    code: event.code,
+                    reason: event.reason || '',
+                    wasClean: !!event.wasClean
+                });
+            }
+        }
+
+        send(data) {
+            if (this.readyState === WebSocket.CONNECTING) throw new Error('InvalidStateError');
+            if (this.readyState !== WebSocket.OPEN) return;
+
+            let payload = data;
+            let binary = typeof data !== 'string';
+            if (typeof Blob !== 'undefined' && data instanceof Blob) payload = data._data;
+            if (binary && !(payload instanceof ArrayBuffer) && !ArrayBuffer.isView(payload)) {
+                throw new TypeError('WebSocket.send supports strings, ArrayBuffers, typed arrays, and Blobs');
+            }
+            this.bufferedAmount = typeof payload === 'string' ? payload.length : payload.byteLength;
+            if (!__webSocketSend(this._id, payload, binary)) throw new Error('WebSocket send failed');
+            this.bufferedAmount = 0;
+        }
+
+        close(code = 1000, reason = '') {
+            if (this.readyState === WebSocket.CLOSING || this.readyState === WebSocket.CLOSED) return;
+            if (code !== 1000 && (code < 3000 || code > 4999)) throw new Error('InvalidAccessError');
+            if (new TextEncoder().encode(String(reason)).byteLength > 123) throw new Error('SyntaxError');
+            this.readyState = WebSocket.CLOSING;
+            __webSocketClose(this._id, code, String(reason));
+        }
+    }
+
+    for (const key of ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED']) {
+        WebSocket.prototype[key] = WebSocket[key];
+    }
+    globalThis.WebSocket = WebSocket;
+})();
+)WEBSOCKET";
+        jsEngine_->eval(webSocketPolyfill, "websocket-polyfill.js");
+        std::cout << "[Mystral] WebSocket API initialized" << std::endl;
+    }
+
+    void processWebSocketEvents() {
+        if (!jsEngine_) return;
+        for (auto& event : websocket::getClientManager().pollEvents()) {
+            auto callbackIt = webSocketCallbacks_.find(event.connectionId);
+            if (callbackIt == webSocketCallbacks_.end()) continue;
+
+            auto value = jsEngine_->newObject();
+            switch (event.type) {
+                case websocket::EventType::Open:
+                    jsEngine_->setProperty(value, "type", jsEngine_->newString("open"));
+                    jsEngine_->setProperty(value, "protocol", jsEngine_->newString(event.protocol.c_str()));
+                    break;
+                case websocket::EventType::Message:
+                    jsEngine_->setProperty(value, "type", jsEngine_->newString("message"));
+                    jsEngine_->setProperty(value, "binary", jsEngine_->newBoolean(event.binary));
+                    if (event.binary) {
+                        jsEngine_->setProperty(value, "data", jsEngine_->newArrayBuffer(event.data.data(), event.data.size()));
+                    } else {
+                        jsEngine_->setProperty(value, "data", jsEngine_->newString(event.text.c_str()));
+                    }
+                    break;
+                case websocket::EventType::Error:
+                    jsEngine_->setProperty(value, "type", jsEngine_->newString("error"));
+                    jsEngine_->setProperty(value, "message", jsEngine_->newString(event.text.c_str()));
+                    break;
+                case websocket::EventType::Close:
+                    jsEngine_->setProperty(value, "type", jsEngine_->newString("close"));
+                    jsEngine_->setProperty(value, "code", jsEngine_->newNumber(event.closeCode));
+                    jsEngine_->setProperty(value, "reason", jsEngine_->newString(event.text.c_str()));
+                    jsEngine_->setProperty(value, "wasClean", jsEngine_->newBoolean(event.clean));
+                    break;
+            }
+
+            jsEngine_->call(callbackIt->second, jsEngine_->newUndefined(), {value});
+            if (event.type == websocket::EventType::Close) {
+                jsEngine_->unprotect(callbackIt->second);
+                webSocketCallbacks_.erase(callbackIt);
+            }
+        }
+    }
+
     void setupURL() {
         if (!jsEngine_) return;
 
@@ -3609,6 +3837,7 @@ globalThis.__mystralNativeDecodeDracoAsync = function(buffer, attrs) {
     std::unique_ptr<js::Engine> jsEngine_;
     std::unique_ptr<js::ModuleSystem> moduleSystem_;
     storage::LocalStorage localStorage_;
+    std::unordered_map<uint64_t, js::JSValueHandle> webSocketCallbacks_;
 
     // requestAnimationFrame state
     struct RAFCallback {

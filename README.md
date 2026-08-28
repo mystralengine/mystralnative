@@ -400,12 +400,12 @@ All dependencies are downloaded automatically as prebuilt binaries:
 | SDL3 | Windowing, input, audio |
 | V8 / QuickJS / JSC | JavaScript engine |
 | Skia | Canvas 2D rendering |
-| libcurl | HTTP requests |
+| libcurl | HTTP and WebSocket requests |
 | libuv | Async I/O, timers, file watching |
 | Draco | Native Draco mesh decompression (optional) |
 | SWC | TypeScript transpiling |
 
-Prebuilt dependency binaries are managed via [mystralengine/library-builder](https://github.com/mystralengine/library-builder).
+Prebuilt dependency binaries are managed via [mystralengine/library-builder](https://github.com/mystralengine/library-builder). Desktop WebSocket support requires libcurl built with its `ws` and `wss` protocols enabled.
 
 ## Documentation
 

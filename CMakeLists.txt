@@ -1062,6 +1062,7 @@ set(MYSTRAL_SOURCES
     src/utils/cgltf_impl.cpp
     src/http/http_client.cpp
     src/http/async_http_client.cpp
+    src/websocket/client.cpp
     src/webtransport/webtransport.cpp
     src/webtransport/webtransport_polyfill.cpp
     src/fs/async_file.cpp
@@ -1375,6 +1376,14 @@ else()
     find_package(CURL REQUIRED)
     find_package(ZLIB REQUIRED)
     target_link_libraries(mystral-runtime PUBLIC CURL::libcurl ZLIB::ZLIB)
+    if(WIN32 AND (VCPKG_TARGET_TRIPLET MATCHES "-static$" OR CURL_USE_STATIC_LIBS))
+        set_source_files_properties(
+            src/http/http_client.cpp
+            src/http/async_http_client.cpp
+            src/websocket/client.cpp
+            PROPERTIES COMPILE_DEFINITIONS CURL_STATICLIB
+        )
+    endif()
     message(STATUS "Found CURL: ${CURL_LIBRARIES}")
     message(STATUS "Found ZLIB: ${ZLIB_LIBRARIES}")
 endif()
