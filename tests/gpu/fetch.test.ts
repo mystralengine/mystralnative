@@ -225,4 +225,55 @@ describe("Fetch API", () => {
 
     expect(stdout).toContain("PASS: arrayBuffer works");
   });
+
+  it("should support XMLHttpRequest text responses and events", async () => {
+    if (!existsSync(MYSTRAL_BIN)) {
+      console.log("Skipping: mystral binary not found");
+      return;
+    }
+
+    const testScript = `
+      const states = [];
+      const xhr = new XMLHttpRequest();
+      xhr.onreadystatechange = () => states.push(xhr.readyState);
+      xhr.open('GET', 'file://${join(TEST_DIR, "test.txt")}');
+      xhr.setRequestHeader('X-Test', 'one');
+      xhr.setRequestHeader('X-Test', 'two');
+      xhr.onprogress = (event) => {
+        if (event.loaded !== 13 || event.total !== 13 || !event.lengthComputable) {
+          console.log('FAIL: invalid progress event');
+        }
+      };
+      xhr.onload = () => {
+        const passed = xhr.status === 200 && xhr.responseText === 'Hello, World!' &&
+          states.includes(XMLHttpRequest.HEADERS_RECEIVED) &&
+          states[states.length - 1] === XMLHttpRequest.DONE;
+        console.log(passed ? 'PASS: XMLHttpRequest works' : 'FAIL: invalid XMLHttpRequest result');
+      };
+      xhr.onerror = () => console.log('FAIL: XMLHttpRequest error');
+      xhr.send();
+    `;
+
+    writeFileSync(join(TEST_DIR, "xhr-test.js"), testScript);
+
+    const proc = spawn({
+      cmd: [
+        MYSTRAL_BIN,
+        "run",
+        join(TEST_DIR, "xhr-test.js"),
+        "--headless",
+        "--screenshot",
+        join(TEST_DIR, "xhr-test-screenshot.png"),
+        "--frames",
+        "10",
+      ],
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    const stdout = await new Response(proc.stdout).text();
+    await proc.exited;
+
+    expect(stdout).toContain("PASS: XMLHttpRequest works");
+  });
 });

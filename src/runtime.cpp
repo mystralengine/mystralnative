@@ -1668,6 +1668,11 @@ private:
                 jsEngine_->setProperty(result, "ok", jsEngine_->newBoolean(response.ok));
                 jsEngine_->setProperty(result, "status", jsEngine_->newNumber(response.status));
                 jsEngine_->setProperty(result, "url", jsEngine_->newString(response.url.c_str()));
+                auto responseHeaders = jsEngine_->newObject();
+                for (const auto& [name, value] : response.headers) {
+                    jsEngine_->setProperty(responseHeaders, name.c_str(), jsEngine_->newString(value.c_str()));
+                }
+                jsEngine_->setProperty(result, "headers", responseHeaders);
 
                 if (!response.error.empty()) {
                     jsEngine_->setProperty(result, "error", jsEngine_->newString(response.error.c_str()));
@@ -1741,6 +1746,11 @@ private:
                         engine->setProperty(result, "ok", engine->newBoolean(response.ok));
                         engine->setProperty(result, "status", engine->newNumber(response.status));
                         engine->setProperty(result, "url", engine->newString(response.url.c_str()));
+                        auto responseHeaders = engine->newObject();
+                        for (const auto& [name, value] : response.headers) {
+                            engine->setProperty(responseHeaders, name.c_str(), engine->newString(value.c_str()));
+                        }
+                        engine->setProperty(result, "headers", responseHeaders);
 
                         if (!response.error.empty()) {
                             engine->setProperty(result, "error", engine->newString(response.error.c_str()));
@@ -1973,7 +1983,13 @@ class Headers {
     }
 
     set(name, value) {
-        this._headers.set(name.toLowerCase(), value);
+        this._headers.set(name.toLowerCase(), String(value));
+    }
+
+    append(name, value) {
+        const key = name.toLowerCase();
+        const previous = this._headers.get(key);
+        this._headers.set(key, previous ? `${previous}, ${value}` : String(value));
     }
 
     has(name) {
@@ -2114,7 +2130,8 @@ async function fetch(input, options = {}) {
                         ok: result.ok,
                         status: result.status,
                         statusText: result.ok ? 'OK' : 'Error',
-                        url: result.url || url
+                        url: result.url || url,
+                        headers: result.headers || {}
                     }));
                 }
             });
@@ -2164,6 +2181,173 @@ globalThis.Response = Response;
 
         jsEngine_->eval(fetchPolyfill, "fetch-polyfill.js");
         std::cout << "[Mystral] Fetch API initialized (file://, http://, https://)" << std::endl;
+
+        const char* xhrPolyfill = R"XHR(
+if (typeof globalThis.XMLHttpRequest === 'undefined') {
+    class XMLHttpRequest {
+        static UNSENT = 0;
+        static OPENED = 1;
+        static HEADERS_RECEIVED = 2;
+        static LOADING = 3;
+        static DONE = 4;
+
+        constructor() {
+            this.readyState = XMLHttpRequest.UNSENT;
+            this.response = null;
+            this.responseText = '';
+            this.responseType = '';
+            this.responseURL = '';
+            this.status = 0;
+            this.statusText = '';
+            this.timeout = 0;
+            this.withCredentials = false;
+            this.onreadystatechange = null;
+            this.onload = null;
+            this.onerror = null;
+            this.onloadend = null;
+            this.onabort = null;
+            this.onloadstart = null;
+            this.onprogress = null;
+            this.ontimeout = null;
+            this.responseXML = null;
+            this._method = 'GET';
+            this._url = '';
+            this._headers = new Headers();
+            this._responseHeaders = new Headers();
+            this._listeners = new Map();
+            this._aborted = false;
+            this.upload = { addEventListener() {}, removeEventListener() {} };
+        }
+
+        addEventListener(type, callback) {
+            const listeners = this._listeners.get(type) || [];
+            listeners.push(callback);
+            this._listeners.set(type, listeners);
+        }
+
+        removeEventListener(type, callback) {
+            const listeners = this._listeners.get(type) || [];
+            this._listeners.set(type, listeners.filter(listener => listener !== callback));
+        }
+
+        _dispatch(type, properties = {}) {
+            const event = { type, target: this, currentTarget: this, ...properties };
+            const handler = this['on' + type];
+            if (typeof handler === 'function') handler.call(this, event);
+            for (const listener of this._listeners.get(type) || []) listener.call(this, event);
+        }
+
+        _setReadyState(state) {
+            this.readyState = state;
+            this._dispatch('readystatechange');
+        }
+
+        open(method, url, async = true, username, password) {
+            if (!async) throw new Error('Synchronous XMLHttpRequest is not supported');
+            this._method = String(method || 'GET').toUpperCase();
+            this._url = String(url);
+            this._setReadyState(XMLHttpRequest.OPENED);
+        }
+
+        setRequestHeader(name, value) {
+            if (this.readyState !== XMLHttpRequest.OPENED) {
+                throw new Error('InvalidStateError');
+            }
+            this._headers.append(name, value);
+        }
+
+        getResponseHeader(name) {
+            return this._responseHeaders.get(name);
+        }
+
+        getAllResponseHeaders() {
+            return [...this._responseHeaders.entries()]
+                .map(([name, value]) => `${name}: ${value}\r\n`)
+                .join('');
+        }
+
+        overrideMimeType() {}
+
+        abort() {
+            this._aborted = true;
+            this.status = 0;
+            this.response = null;
+            this.responseText = '';
+            this._setReadyState(XMLHttpRequest.DONE);
+            this._dispatch('abort');
+            this._dispatch('loadend');
+        }
+
+        async send(body = null) {
+            if (this.readyState !== XMLHttpRequest.OPENED) {
+                throw new Error('InvalidStateError');
+            }
+            this._aborted = false;
+            let timeoutHandle = null;
+            if (this.timeout > 0) {
+                timeoutHandle = setTimeout(() => {
+                    if (this.readyState === XMLHttpRequest.DONE) return;
+                    this._aborted = true;
+                    this.status = 0;
+                    this._setReadyState(XMLHttpRequest.DONE);
+                    this._dispatch('timeout');
+                    this._dispatch('loadend');
+                }, this.timeout);
+            }
+            this._dispatch('loadstart');
+            try {
+                const response = await fetch(this._url, {
+                    method: this._method,
+                    headers: this._headers,
+                    body,
+                    credentials: this.withCredentials ? 'include' : 'same-origin'
+                });
+                if (this._aborted) return;
+
+                this.status = response.status;
+                this.statusText = response.statusText;
+                this.responseURL = response.url;
+                this._responseHeaders = response.headers;
+                this._setReadyState(XMLHttpRequest.HEADERS_RECEIVED);
+                this._setReadyState(XMLHttpRequest.LOADING);
+
+                const data = await response.arrayBuffer();
+                if (this._aborted) return;
+                const text = new TextDecoder().decode(data);
+                this._dispatch('progress', { loaded: data.byteLength, total: data.byteLength, lengthComputable: true });
+                switch (this.responseType) {
+                    case 'arraybuffer': this.response = data; break;
+                    case 'blob': this.response = new Blob([data]); break;
+                    case 'json': this.response = text ? JSON.parse(text) : null; break;
+                    case 'document': this.response = null; break;
+                    default:
+                        this.response = text;
+                        this.responseText = text;
+                        break;
+                }
+                if (timeoutHandle !== null) clearTimeout(timeoutHandle);
+                this._setReadyState(XMLHttpRequest.DONE);
+                this._dispatch('load');
+                this._dispatch('loadend');
+            } catch (error) {
+                if (this._aborted) return;
+                if (timeoutHandle !== null) clearTimeout(timeoutHandle);
+                this.status = 0;
+                this.statusText = '';
+                this._setReadyState(XMLHttpRequest.DONE);
+                this._dispatch('error');
+                this._dispatch('loadend');
+            }
+        }
+    }
+    for (const key of ['UNSENT', 'OPENED', 'HEADERS_RECEIVED', 'LOADING', 'DONE']) {
+        XMLHttpRequest.prototype[key] = XMLHttpRequest[key];
+    }
+    globalThis.XMLHttpRequest = XMLHttpRequest;
+}
+)XHR";
+        jsEngine_->eval(xhrPolyfill, "xhr-polyfill.js");
+        std::cout << "[Mystral] XMLHttpRequest API initialized" << std::endl;
 
         // --- WHATWG Streams -------------------------------------------------
         // Real (spec-shaped) ReadableStream / WritableStream / TransformStream
