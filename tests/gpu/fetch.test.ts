@@ -276,4 +276,63 @@ describe("Fetch API", () => {
 
     expect(stdout).toContain("PASS: XMLHttpRequest works");
   });
+
+  it("should forward XMLHttpRequest methods, headers, bodies, and response headers", async () => {
+    if (!existsSync(MYSTRAL_BIN)) {
+      console.log("Skipping: mystral binary not found");
+      return;
+    }
+
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const body = await request.text();
+        return new Response(
+          `${request.method}|${request.headers.get("x-test")}|${body}`,
+          { headers: { "X-Reply": "seen" } }
+        );
+      },
+    });
+
+    try {
+      const testScript = `
+        const xhr = new XMLHttpRequest();
+        xhr.open('PATCH', '${server.url}resource');
+        xhr.setRequestHeader('X-Test', 'one');
+        xhr.setRequestHeader('X-Test', 'two');
+        xhr.onload = () => {
+          const passed = xhr.status === 200 &&
+            xhr.responseText === 'PATCH|one, two|payload' &&
+            xhr.getResponseHeader('x-reply') === 'seen';
+          console.log(passed ? 'PASS: XMLHttpRequest options work' :
+            'FAIL: ' + xhr.status + '|' + xhr.responseText + '|' + xhr.getResponseHeader('x-reply'));
+        };
+        xhr.onerror = () => console.log('FAIL: XMLHttpRequest options error');
+        xhr.send('payload');
+      `;
+      writeFileSync(join(TEST_DIR, "xhr-options-test.js"), testScript);
+
+      const proc = spawn({
+        cmd: [
+          MYSTRAL_BIN,
+          "run",
+          join(TEST_DIR, "xhr-options-test.js"),
+          "--headless",
+          "--screenshot",
+          join(TEST_DIR, "xhr-options-test-screenshot.png"),
+          "--frames",
+          "120",
+        ],
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+
+      const stdout = await new Response(proc.stdout).text();
+      await proc.exited;
+      expect(stdout).toContain("PASS: XMLHttpRequest options work");
+    } finally {
+      server.stop(true);
+    }
+  });
 });

@@ -475,8 +475,13 @@ void AsyncHttpClient::request(const std::string& method,
             curl_easy_setopt(easy, CURLOPT_POSTFIELDS, ctx->postData.data());
             curl_easy_setopt(easy, CURLOPT_POSTFIELDSIZE, (long)ctx->postData.size());
         }
-    } else if (method == "DELETE") {
-        curl_easy_setopt(easy, CURLOPT_CUSTOMREQUEST, "DELETE");
+    } else if (method != "GET") {
+        curl_easy_setopt(easy, CURLOPT_CUSTOMREQUEST, method.c_str());
+        if (!body.empty()) {
+            ctx->postData = body;
+            curl_easy_setopt(easy, CURLOPT_POSTFIELDS, ctx->postData.data());
+            curl_easy_setopt(easy, CURLOPT_POSTFIELDSIZE, (long)ctx->postData.size());
+        }
     }
 
     // Set write callback

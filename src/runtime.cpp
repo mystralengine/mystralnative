@@ -1728,6 +1728,19 @@ private:
                             }
                         }
                     }
+
+                    auto headersVal = jsEngine_->getProperty(optObj, "headers");
+                    if (jsEngine_->isArray(headersVal)) {
+                        auto lengthVal = jsEngine_->getProperty(headersVal, "length");
+                        auto length = static_cast<uint32_t>(jsEngine_->toNumber(lengthVal));
+                        for (uint32_t index = 0; index < length; ++index) {
+                            auto pair = jsEngine_->getPropertyIndex(headersVal, index);
+                            if (!jsEngine_->isArray(pair)) continue;
+                            auto name = jsEngine_->toString(jsEngine_->getPropertyIndex(pair, 0));
+                            auto value = jsEngine_->toString(jsEngine_->getPropertyIndex(pair, 1));
+                            if (!name.empty()) options.headers[name] = value;
+                        }
+                    }
                 }
 
                 // Get and protect the callback
@@ -2122,7 +2135,11 @@ async function fetch(input, options = {}) {
         // HTTP/HTTPS request via async libcurl + libuv (non-blocking)
         return new Promise((resolve, reject) => {
             if (signal) signal.addEventListener('abort', () => reject(abortError()));
-            __httpRequestAsync(url, options, (result) => {
+            const nativeOptions = {
+                ...options,
+                headers: options.headers ? [...new Headers(options.headers).entries()] : []
+            };
+            __httpRequestAsync(url, nativeOptions, (result) => {
                 if (result.error) {
                     reject(new Error('Fetch error: ' + result.error));
                 } else {
