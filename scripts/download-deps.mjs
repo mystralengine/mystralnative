@@ -12,7 +12,7 @@
  *   node scripts/download-deps.mjs --only skia-ios  # Download only iOS Skia
  *   node scripts/download-deps.mjs --force      # Re-download even if exists
  *
- * Desktop deps: wgpu, sdl3, dawn, v8, quickjs, stb, cgltf, webp, skia, swc
+ * Desktop deps: wgpu, sdl3, dawn, v8, quickjs, stb, cgltf, lexbor, webp, skia, swc
  * iOS deps: wgpu-ios, skia-ios (for cross-compilation from macOS)
  * Android deps: wgpu-android, sdl3-android
  */
@@ -252,6 +252,13 @@ const DEPS = {
       'cgltf.h',
     ],
     rawUrl: 'https://raw.githubusercontent.com/jkuhlmann/cgltf/v1.14/cgltf.h',
+  },
+  lexbor: {
+    // Lexbor HTML5 parser and DOM core for template.innerHTML and CSS selectors
+    // https://github.com/lexbor/lexbor/releases
+    version: '3.0.0',
+    getUrl: () => `https://github.com/lexbor/lexbor/archive/refs/tags/v${DEPS.lexbor.version}.tar.gz`,
+    extractTo: 'lexbor',
   },
   webp: {
     // libwebp for WebP image decoding (used by GLTF EXT_texture_webp extension)
@@ -772,7 +779,7 @@ async function main() {
   const onlyIndex = args.indexOf('--only');
 
   // Desktop deps (downloaded by default)
-  const desktopDeps = ['wgpu', 'sdl3', 'dawn', 'v8', 'quickjs', 'stb', 'cgltf', 'webp', 'skia', 'swc', 'libuv', 'draco', 'quiche'];
+  const desktopDeps = ['wgpu', 'sdl3', 'dawn', 'v8', 'quickjs', 'stb', 'cgltf', 'lexbor', 'webp', 'skia', 'swc', 'libuv', 'draco', 'quiche'];
 
   // iOS deps (only downloaded with --only or --ios)
   const iosDeps = ['wgpu-ios', 'skia-ios', 'quiche-ios'];

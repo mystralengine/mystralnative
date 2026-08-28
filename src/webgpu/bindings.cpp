@@ -707,7 +707,9 @@ bool initBindings(js::Engine* engine, void* wgpuInstance, void* wgpuDevice, void
             g_engine->setProperty(element, "style", createStyleObject());
             g_engine->setProperty(element, "dataset", g_engine->newObject());
             g_engine->setProperty(element, "className", g_engine->newString(""));
-            g_engine->setProperty(element, "innerHTML", g_engine->newString(""));
+            if (tagName != "template" && tagName != "TEMPLATE") {
+                g_engine->setProperty(element, "innerHTML", g_engine->newString(""));
+            }
             g_engine->setProperty(element, "textContent", g_engine->newString(""));
             g_engine->setProperty(element, "tagName", g_engine->newString(tagName.c_str()));
             g_engine->setProperty(element, "appendChild",
@@ -1025,6 +1027,16 @@ bool initBindings(js::Engine* engine, void* wgpuInstance, void* wgpuDevice, void
                 );
             }
 
+#ifdef MYSTRAL_HAS_LEXBOR
+            if (tagName == "template" || tagName == "TEMPLATE") {
+                auto setTemplatePrototype =
+                    g_engine->getGlobalProperty("__mystralSetTemplatePrototype");
+                if (g_engine->isFunction(setTemplatePrototype)) {
+                    g_engine->call(setTemplatePrototype, g_engine->newUndefined(), {element});
+                }
+            }
+#endif
+
             return element;
         })
     );
@@ -1071,7 +1083,16 @@ bool initBindings(js::Engine* engine, void* wgpuInstance, void* wgpuDevice, void
     );
     engine->setProperty(existingDocument, "importNode",
         engine->newFunction("importNode", [](void* ctx, const std::vector<js::JSValueHandle>& args) {
-            return args.empty() ? g_engine->newNull() : args[0];
+            if (args.empty()) {
+                return g_engine->newNull();
+            }
+            auto cloneNode = g_engine->getProperty(args[0], "cloneNode");
+            if (!g_engine->isFunction(cloneNode)) {
+                return args[0];
+            }
+            std::vector<js::JSValueHandle> cloneArgs;
+            cloneArgs.push_back(args.size() > 1 ? args[1] : g_engine->newBoolean(false));
+            return g_engine->call(cloneNode, args[0], cloneArgs);
         })
     );
 

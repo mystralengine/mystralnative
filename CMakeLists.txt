@@ -40,6 +40,9 @@ option(MYSTRAL_USE_WGPU "Use wgpu-native WebGPU implementation" OFF)  # Alternat
 option(MYSTRAL_USE_WEBGL "Enable ANGLE-backed WebGL 2 compatibility" OFF)
 set(MYSTRAL_ANGLE_ROOT "" CACHE PATH "ANGLE runtime root containing headers and Windows DLLs")
 
+# HTML5 parser and DOM core (optional - Lexbor)
+option(MYSTRAL_USE_LEXBOR "Enable Lexbor HTML5 template parsing" ON)
+
 # Ray Tracing (optional - hardware RT via DXR/Vulkan/Metal)
 option(MYSTRAL_USE_RAYTRACING "Enable hardware ray tracing support" OFF)
 
@@ -77,6 +80,7 @@ message(STATUS "Mystral Platform: ${MYSTRAL_PLATFORM}")
 message(STATUS "JS Engine: V8=${MYSTRAL_USE_V8} JSC=${MYSTRAL_USE_JSC} QuickJS=${MYSTRAL_USE_QUICKJS}")
 message(STATUS "WebGPU: Dawn=${MYSTRAL_USE_DAWN} wgpu=${MYSTRAL_USE_WGPU}")
 message(STATUS "WebGL 2: ANGLE=${MYSTRAL_USE_WEBGL}")
+message(STATUS "HTML/DOM: Lexbor=${MYSTRAL_USE_LEXBOR}")
 
 # ============================================================================
 # Third Party Dependencies
@@ -116,6 +120,33 @@ if(MYSTRAL_USE_WEBGL)
 
     message(STATUS "ANGLE headers: ${MYSTRAL_ANGLE_INCLUDE_DIR}")
     message(STATUS "ANGLE runtime: ${MYSTRAL_ANGLE_RUNTIME_DIR}")
+endif()
+
+set(LEXBOR_FOUND OFF)
+if(MYSTRAL_USE_LEXBOR)
+    set(LEXBOR_DIR ${THIRD_PARTY_DIR}/lexbor)
+    file(GLOB LEXBOR_SOURCE_DIRS ${LEXBOR_DIR}/lexbor-*)
+    if(LEXBOR_SOURCE_DIRS)
+        list(GET LEXBOR_SOURCE_DIRS 0 LEXBOR_SOURCE_DIR)
+    elseif(EXISTS ${LEXBOR_DIR}/CMakeLists.txt)
+        set(LEXBOR_SOURCE_DIR ${LEXBOR_DIR})
+    endif()
+
+    if(LEXBOR_SOURCE_DIR AND EXISTS ${LEXBOR_SOURCE_DIR}/CMakeLists.txt)
+        set(LEXBOR_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+        set(LEXBOR_BUILD_STATIC ON CACHE BOOL "" FORCE)
+        set(LEXBOR_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+        set(LEXBOR_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+        set(LEXBOR_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+        set(LEXBOR_BUILD_UTILS OFF CACHE BOOL "" FORCE)
+        add_subdirectory(${LEXBOR_SOURCE_DIR} ${CMAKE_BINARY_DIR}/lexbor-build EXCLUDE_FROM_ALL)
+        if(TARGET lexbor_static)
+            set(LEXBOR_FOUND ON)
+            message(STATUS "Found Lexbor: ${LEXBOR_SOURCE_DIR}")
+        endif()
+    else()
+        message(STATUS "Lexbor not found - native HTML template parsing disabled. Run 'node scripts/download-deps.mjs --only lexbor' to enable.")
+    endif()
 endif()
 
 # SDL3 - Build from source as static library for single-binary distribution
@@ -1054,6 +1085,13 @@ if(MYSTRAL_USE_WEBGL)
     )
 endif()
 
+if(LEXBOR_FOUND)
+    list(APPEND MYSTRAL_SOURCES
+        src/dom/html_template.cpp
+        src/dom/bindings.cpp
+    )
+endif()
+
 # Ray tracing sources (conditional)
 if(MYSTRAL_USE_RAYTRACING)
     list(APPEND MYSTRAL_SOURCES
@@ -1103,6 +1141,11 @@ target_include_directories(mystral-runtime PRIVATE
 if(MYSTRAL_USE_WEBGL)
     target_include_directories(mystral-runtime PRIVATE ${MYSTRAL_ANGLE_INCLUDE_DIR})
     target_compile_definitions(mystral-runtime PUBLIC MYSTRAL_HAS_WEBGL)
+endif()
+
+if(LEXBOR_FOUND)
+    target_link_libraries(mystral-runtime PRIVATE lexbor_static)
+    target_compile_definitions(mystral-runtime PUBLIC MYSTRAL_HAS_LEXBOR)
 endif()
 
 # Pass build configuration to source code

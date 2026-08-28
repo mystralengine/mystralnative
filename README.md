@@ -112,6 +112,8 @@ cmake --build build --config Release
 
 The current milestone supports WebGL 2 context creation, shaders, buffers, textures, framebuffers, uniforms, instancing, GPU completion, pixel readback, and automatic SDL window presentation through ANGLE/D3D11. The observed API surface of an unchanged Three.js r181 texture, shadow, render-target, and instancing workload is covered. The first WebGL context owns the native window surface; full WebGL IDL coverage and multi-canvas compositing remain in progress.
 
+Native HTML template parsing is available through [Lexbor v3](https://github.com/lexbor/lexbor). `MYSTRAL_USE_LEXBOR=ON` is the default when `third_party/lexbor` is present; run `node scripts/download-deps.mjs --only lexbor` to download the pinned source.
+
 ## What Can You Build?
 
 Here's a complete "Hello Triangle" — the traditional first GPU program:

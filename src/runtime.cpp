@@ -7,6 +7,9 @@
 #endif
 #include "mystral/js/engine.h"
 #include "mystral/js/module_system.h"
+#ifdef MYSTRAL_HAS_LEXBOR
+#include "mystral/dom/bindings.h"
+#endif
 #include "mystral/http/http_client.h"
 #include "mystral/http/async_http_client.h"
 #include "mystral/webtransport/webtransport.h"
@@ -428,6 +431,13 @@ public:
 
         // Set up DOM event system (document, window, addEventListener, etc.)
         setupDOMEvents();
+
+#ifdef MYSTRAL_HAS_LEXBOR
+        if (!dom::initBindings(jsEngine_.get(), config_.debug)) {
+            std::cerr << "[Mystral] Failed to initialize Lexbor DOM bindings" << std::endl;
+            return false;
+        }
+#endif
 
         // Set up localStorage/sessionStorage (file-backed persistence)
         setupStorage();
@@ -3710,8 +3720,14 @@ globalThis.__mystralNativeDecodeDracoAsync = function(buffer, attrs) {
                 auto el = args[0];
                 auto onload = jsEngine_->getProperty(el, "onload");
                 if (!jsEngine_->isUndefined(onload) && !jsEngine_->isNull(onload)) {
-                    // Call onload via setTimeout to simulate async loading
-                    jsEngine_->eval("setTimeout(() => { arguments[0] && arguments[0](); }, 0);", "onload-trigger");
+                    // Schedule the callback through the runtime timer queue so script
+                    // loading remains asynchronous without relying on eval arguments.
+                    auto setTimeout = jsEngine_->getGlobalProperty("setTimeout");
+                    std::vector<js::JSValueHandle> timeoutArgs = {
+                        onload,
+                        jsEngine_->newNumber(0)
+                    };
+                    jsEngine_->call(setTimeout, jsEngine_->newUndefined(), timeoutArgs);
                 }
             }
             return jsEngine_->newUndefined();
