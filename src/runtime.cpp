@@ -2,6 +2,9 @@
 #include "mystral/platform/window.h"
 #include "mystral/platform/input.h"
 #include "mystral/webgpu/context.h"
+#ifdef MYSTRAL_HAS_WEBGL
+#include "mystral/webgl/context.h"
+#endif
 #include "mystral/js/engine.h"
 #include "mystral/js/module_system.h"
 #include "mystral/http/http_client.h"
@@ -556,6 +559,11 @@ public:
             jsEngine_->gc();  // Run twice for good measure
         }
 
+#ifdef MYSTRAL_HAS_WEBGL
+        // Destroy ANGLE contexts while the SDL native window still exists.
+        webgl::shutdownBindings();
+#endif
+
         jsEngine_.reset();    // Release JS engine
         webgpu_.reset();      // Release WebGPU resources
         if (!config_.noSdl) {
@@ -807,6 +815,11 @@ public:
 
         // Execute requestAnimationFrame callbacks (renders a frame)
         executeAnimationFrameCallbacks();
+
+#ifdef MYSTRAL_HAS_WEBGL
+        // WebGL drawing buffers are presented at the frame-compositing boundary.
+        webgl::presentContexts();
+#endif
 
         // Free non-protected handles, per-frame native allocations, and Dawn resources
         jsEngine_->clearFrameHandles();

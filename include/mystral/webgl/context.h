@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace mystral::webgl {
 
@@ -28,11 +29,14 @@ public:
   Context &operator=(const Context &) = delete;
 
   bool initialize(uint32_t width, uint32_t height,
-                  const ContextAttributes &attributes);
+                  const ContextAttributes &attributes,
+                  void *nativeWindow = nullptr);
   void shutdown();
   bool makeCurrent();
+  bool present();
 
   bool isInitialized() const;
+  bool isWindowSurface() const;
   const std::string &errorMessage() const;
   const std::string &renderer() const;
   const std::string &version() const;
@@ -77,6 +81,11 @@ private:
 };
 
 bool initBindings(js::Engine *engine, bool debug = false);
+ContextAttributes
+contextAttributesFromJS(js::Engine *engine,
+                        const std::vector<js::JSValueHandle> &args);
+void presentContexts();
+void shutdownBindings();
 js::JSValueHandle
 createContextJSObject(js::Engine *engine, uint32_t width, uint32_t height,
                       const ContextAttributes &attributes = {});

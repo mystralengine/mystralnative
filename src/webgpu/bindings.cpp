@@ -465,7 +465,8 @@ bool initBindings(js::Engine* engine, void* wgpuInstance, void* wgpuDevice, void
 #ifdef MYSTRAL_HAS_WEBGL
             if (contextType == "webgl2") {
                 auto context = webgl::createContextJSObject(
-                    g_engine, g_canvasWidth, g_canvasHeight);
+                    g_engine, g_canvasWidth, g_canvasHeight,
+                    webgl::contextAttributesFromJS(g_engine, args));
                 if (!g_engine->isNull(context)) {
                     auto canvas = g_engine->getGlobalProperty("canvas");
                     g_engine->setProperty(context, "canvas", canvas);
@@ -773,7 +774,8 @@ bool initBindings(js::Engine* engine, void* wgpuInstance, void* wgpuDevice, void
 
                         canvas->contextWebGL2 = webgl::createContextJSObject(
                             g_engine, static_cast<uint32_t>(canvas->width),
-                            static_cast<uint32_t>(canvas->height));
+                            static_cast<uint32_t>(canvas->height),
+                            webgl::contextAttributesFromJS(g_engine, contextArgs));
                         if (!g_engine->isNull(canvas->contextWebGL2)) {
                             g_engine->setProperty(canvas->contextWebGL2, "canvas", canvasElement);
                             canvas->hasContextWebGL2 = true;

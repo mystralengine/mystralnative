@@ -58,6 +58,7 @@ struct Context::Impl {
   std::string versionName;
   std::string shadingLanguageVersionName;
   bool initialized = false;
+  bool windowSurface = false;
 
   PFNEGLGETPROCADDRESSPROC eglGetProcAddress = nullptr;
   PFNEGLGETDISPLAYPROC eglGetDisplay = nullptr;
@@ -66,7 +67,10 @@ struct Context::Impl {
   PFNEGLCHOOSECONFIGPROC eglChooseConfig = nullptr;
   PFNEGLCREATECONTEXTPROC eglCreateContext = nullptr;
   PFNEGLCREATEPBUFFERSURFACEPROC eglCreatePbufferSurface = nullptr;
+  PFNEGLCREATEWINDOWSURFACEPROC eglCreateWindowSurface = nullptr;
   PFNEGLMAKECURRENTPROC eglMakeCurrent = nullptr;
+  PFNEGLSWAPBUFFERSPROC eglSwapBuffers = nullptr;
+  PFNEGLSWAPINTERVALPROC eglSwapInterval = nullptr;
   PFNEGLDESTROYSURFACEPROC eglDestroySurface = nullptr;
   PFNEGLDESTROYCONTEXTPROC eglDestroyContext = nullptr;
   PFNEGLGETERRORPROC eglGetError = nullptr;
@@ -144,15 +148,20 @@ struct Context::Impl {
     LOAD_EGL(eglChooseConfig);
     LOAD_EGL(eglCreateContext);
     LOAD_EGL(eglCreatePbufferSurface);
+    LOAD_EGL(eglCreateWindowSurface);
     LOAD_EGL(eglMakeCurrent);
+    LOAD_EGL(eglSwapBuffers);
+    LOAD_EGL(eglSwapInterval);
     LOAD_EGL(eglDestroySurface);
     LOAD_EGL(eglDestroyContext);
     LOAD_EGL(eglGetError);
 #undef LOAD_EGL
 
     if (!eglGetDisplay || !eglInitialize || !eglChooseConfig ||
-        !eglCreateContext || !eglCreatePbufferSurface || !eglMakeCurrent ||
-        !eglDestroySurface || !eglDestroyContext || !eglGetError) {
+        !eglCreateContext || !eglCreatePbufferSurface ||
+        !eglCreateWindowSurface || !eglMakeCurrent || !eglSwapBuffers ||
+        !eglSwapInterval || !eglDestroySurface || !eglDestroyContext ||
+        !eglGetError) {
       return fail("ANGLE is missing a required EGL entry point");
     }
     return true;
@@ -204,7 +213,8 @@ Context::Context() : impl_(std::make_unique<Impl>()) {}
 Context::~Context() { shutdown(); }
 
 bool Context::initialize(uint32_t width, uint32_t height,
-                         const ContextAttributes &attributes) {
+                         const ContextAttributes &attributes,
+                         void *nativeWindow) {
   shutdown();
   impl_ = std::make_unique<Impl>();
 
@@ -240,7 +250,7 @@ bool Context::initialize(uint32_t width, uint32_t height,
 
   EGLint configAttributes[] = {
       EGL_SURFACE_TYPE,
-      EGL_PBUFFER_BIT,
+      nativeWindow ? EGL_WINDOW_BIT : EGL_PBUFFER_BIT,
       EGL_RENDERABLE_TYPE,
       EGL_OPENGL_ES3_BIT_KHR,
       EGL_RED_SIZE,
@@ -288,15 +298,24 @@ bool Context::initialize(uint32_t width, uint32_t height,
     return impl_->fail("Could not create an ANGLE OpenGL ES 3 WebGL context");
   }
 
-  const EGLint surfaceAttributes[] = {
-      EGL_WIDTH,  static_cast<EGLint>(width),
-      EGL_HEIGHT, static_cast<EGLint>(height),
-      EGL_NONE,
-  };
-  impl_->surface = impl_->eglCreatePbufferSurface(impl_->display, impl_->config,
-                                                  surfaceAttributes);
+  if (nativeWindow) {
+    impl_->surface = impl_->eglCreateWindowSurface(
+        impl_->display, impl_->config,
+        reinterpret_cast<EGLNativeWindowType>(nativeWindow), nullptr);
+    impl_->windowSurface = impl_->surface != EGL_NO_SURFACE;
+  } else {
+    const EGLint surfaceAttributes[] = {
+        EGL_WIDTH,  static_cast<EGLint>(width),
+        EGL_HEIGHT, static_cast<EGLint>(height),
+        EGL_NONE,
+    };
+    impl_->surface = impl_->eglCreatePbufferSurface(
+        impl_->display, impl_->config, surfaceAttributes);
+  }
   if (impl_->surface == EGL_NO_SURFACE) {
-    return impl_->fail("Could not create an ANGLE WebGL2 drawing buffer");
+    return impl_->fail(nativeWindow
+                           ? "Could not create an ANGLE WebGL2 window surface"
+                           : "Could not create an ANGLE WebGL2 drawing buffer");
   }
 
   if (!impl_->eglMakeCurrent(impl_->display, impl_->surface, impl_->surface,
@@ -315,6 +334,11 @@ bool Context::initialize(uint32_t width, uint32_t height,
   impl_->rendererName = readString(GL_RENDERER);
   impl_->versionName = readString(GL_VERSION);
   impl_->shadingLanguageVersionName = readString(GL_SHADING_LANGUAGE_VERSION);
+  if (impl_->windowSurface) {
+    // WebGL presentation must not impose display-vsync pacing on uncapped
+    // games.
+    impl_->eglSwapInterval(impl_->display, 0);
+  }
   impl_->initialized = true;
   return true;
 }
@@ -338,6 +362,7 @@ void Context::shutdown() {
   impl_->surface = EGL_NO_SURFACE;
   impl_->context = EGL_NO_CONTEXT;
   impl_->initialized = false;
+  impl_->windowSurface = false;
 
   if (impl_->glesModule) {
     FreeLibrary(impl_->glesModule);
@@ -355,7 +380,18 @@ bool Context::makeCurrent() {
                                impl_->context);
 }
 
+bool Context::present() {
+  if (!impl_ || !impl_->initialized || !impl_->windowSurface ||
+      !makeCurrent()) {
+    return false;
+  }
+  return impl_->eglSwapBuffers(impl_->display, impl_->surface) == EGL_TRUE;
+}
+
 bool Context::isInitialized() const { return impl_ && impl_->initialized; }
+bool Context::isWindowSurface() const {
+  return impl_ && impl_->initialized && impl_->windowSurface;
+}
 const std::string &Context::errorMessage() const { return impl_->error; }
 const std::string &Context::renderer() const { return impl_->rendererName; }
 const std::string &Context::version() const { return impl_->versionName; }
@@ -513,12 +549,15 @@ struct Context::Impl {
 
 Context::Context() : impl_(std::make_unique<Impl>()) {}
 Context::~Context() = default;
-bool Context::initialize(uint32_t, uint32_t, const ContextAttributes &) {
+bool Context::initialize(uint32_t, uint32_t, const ContextAttributes &,
+                         void *) {
   return false;
 }
 void Context::shutdown() {}
 bool Context::makeCurrent() { return false; }
+bool Context::present() { return false; }
 bool Context::isInitialized() const { return false; }
+bool Context::isWindowSurface() const { return false; }
 const std::string &Context::errorMessage() const { return impl_->error; }
 const std::string &Context::renderer() const { return impl_->error; }
 const std::string &Context::version() const { return impl_->error; }

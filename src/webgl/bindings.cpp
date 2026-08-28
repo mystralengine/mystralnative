@@ -4,6 +4,9 @@
 
 #define GL_GLES_PROTOTYPES 0
 #include <GLES3/gl3.h>
+#include <SDL3/SDL.h>
+
+#include "mystral/platform/window.h"
 
 #include <iostream>
 #include <memory>
@@ -16,6 +19,9 @@ namespace {
 
 js::Engine *g_engine = nullptr;
 bool g_debug = false;
+void *g_nativeWindow = nullptr;
+bool g_windowContextClaimed = false;
+bool g_presentFailureLogged = false;
 std::vector<std::unique_ptr<Context>> g_contexts;
 
 uint32_t toUint32(js::JSValueHandle value) {
@@ -149,13 +155,50 @@ readContextAttributes(const std::vector<js::JSValueHandle> &args) {
 
 } // namespace
 
+ContextAttributes
+contextAttributesFromJS(js::Engine *engine,
+                        const std::vector<js::JSValueHandle> &args) {
+  g_engine = engine;
+  return readContextAttributes(args);
+}
+
 bool initBindings(js::Engine *engine, bool debug) {
   if (!engine) {
     return false;
   }
   g_engine = engine;
   g_debug = debug;
+  g_windowContextClaimed = false;
+  g_presentFailureLogged = false;
+
+  SDL_Window *sdlWindow = platform::getSDLWindow();
+  if (sdlWindow) {
+    g_nativeWindow =
+        SDL_GetPointerProperty(SDL_GetWindowProperties(sdlWindow),
+                               SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
+  }
+  if (g_debug) {
+    std::cout << "[WebGL] Native window: " << g_nativeWindow << std::endl;
+  }
   return true;
+}
+
+void presentContexts() {
+  for (const auto &context : g_contexts) {
+    if (context->isWindowSurface() && !context->present() &&
+        !g_presentFailureLogged) {
+      std::cerr << "[WebGL] ANGLE window presentation failed" << std::endl;
+      g_presentFailureLogged = true;
+    }
+  }
+}
+
+void shutdownBindings() {
+  g_contexts.clear();
+  g_engine = nullptr;
+  g_nativeWindow = nullptr;
+  g_windowContextClaimed = false;
+  g_presentFailureLogged = false;
 }
 
 js::JSValueHandle createContextJSObject(js::Engine *engine, uint32_t width,
@@ -167,10 +210,20 @@ js::JSValueHandle createContextJSObject(js::Engine *engine, uint32_t width,
   g_engine = engine;
 
   auto context = std::make_unique<Context>();
-  if (!context->initialize(width, height, attributes)) {
-    std::cerr << "[WebGL] Context creation failed: " << context->errorMessage()
-              << std::endl;
-    return engine->newNull();
+  void *nativeWindow = !g_windowContextClaimed ? g_nativeWindow : nullptr;
+  if (!context->initialize(width, height, attributes, nativeWindow)) {
+    const std::string windowError = context->errorMessage();
+    if (!nativeWindow || !context->initialize(width, height, attributes)) {
+      std::cerr << "[WebGL] Context creation failed: "
+                << context->errorMessage() << std::endl;
+      return engine->newNull();
+    }
+    std::cerr << "[WebGL] Window surface unavailable, using an offscreen "
+                 "drawing buffer: "
+              << windowError << std::endl;
+  }
+  if (context->isWindowSurface()) {
+    g_windowContextClaimed = true;
   }
 
   Context *capturedContext = context.get();
@@ -180,6 +233,9 @@ js::JSValueHandle createContextJSObject(js::Engine *engine, uint32_t width,
     std::cout << "[WebGL] Renderer: " << capturedContext->renderer()
               << std::endl;
     std::cout << "[WebGL] Version: " << capturedContext->version() << std::endl;
+    std::cout << "[WebGL] Surface: "
+              << (capturedContext->isWindowSurface() ? "window" : "offscreen")
+              << std::endl;
   }
 
   auto gl = engine->newObject();
@@ -459,6 +515,16 @@ js::JSValueHandle createContextJSObject(js::Engine *engine, uint32_t width,
             return g_engine->newUndefined();
           }));
   engine->setProperty(
+      gl, "commit",
+      engine->newFunction(
+          "commit",
+          [capturedContext](void *, const std::vector<js::JSValueHandle> &) {
+            if (capturedContext->isWindowSurface()) {
+              capturedContext->present();
+            }
+            return g_engine->newUndefined();
+          }));
+  engine->setProperty(
       gl, "readPixels",
       engine->newFunction(
           "readPixels",
@@ -561,7 +627,13 @@ js::JSValueHandle createContextJSObject(js::Engine *engine, uint32_t width,
 
 namespace mystral::webgl {
 
+ContextAttributes
+contextAttributesFromJS(js::Engine *, const std::vector<js::JSValueHandle> &) {
+  return {};
+}
 bool initBindings(js::Engine *, bool) { return false; }
+void presentContexts() {}
+void shutdownBindings() {}
 js::JSValueHandle createContextJSObject(js::Engine *engine, uint32_t, uint32_t,
                                         const ContextAttributes &) {
   return engine ? engine->newNull() : js::JSValueHandle{};

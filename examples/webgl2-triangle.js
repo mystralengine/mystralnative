@@ -82,4 +82,16 @@ console.log(`WEBGL2_TRIANGLE_RESULT=${passed ? "pass" : "fail"}`);
 if (!passed) {
     throw new Error("ANGLE WebGL2 triangle validation failed");
 }
-process.exit(0);
+
+let presentedFrames = 0;
+function render() {
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    presentedFrames++;
+    requestAnimationFrame(render);
+}
+requestAnimationFrame(render);
+setTimeout(() => {
+    console.log(`WEBGL2_PRESENTED_FRAMES=${presentedFrames}`);
+    process.exit(0);
+}, 1500);
