@@ -18,6 +18,7 @@ struct ContextAttributes {
   bool premultipliedAlpha = true;
   bool preserveDrawingBuffer = false;
   bool preferHighPerformance = true;
+  bool allowNativeTextureInterop = false;
 };
 
 struct ShaderPrecisionFormat {
@@ -46,6 +47,11 @@ public:
   void shutdown();
   bool makeCurrent();
   bool present();
+
+  // Windows/ANGLE compositor integration. The returned device is owned by
+  // ANGLE. Imported D3D11 textures are exposed as regular GL textures.
+  void *nativeD3D11Device();
+  uint32_t importD3D11Texture(void *nativeTexture);
 
   bool isInitialized() const;
   bool isWindowSurface() const;

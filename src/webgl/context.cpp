@@ -12,6 +12,7 @@
 #include <EGL/eglext.h>
 #include <EGL/eglext_angle.h>
 #include <GLES3/gl3.h>
+#include <GLES2/gl2ext.h>
 
 #include <algorithm>
 #include <iomanip>
@@ -380,7 +381,7 @@ bool Context::initialize(uint32_t width, uint32_t height,
       EGL_CONTEXT_CLIENT_VERSION,
       3,
       EGL_CONTEXT_WEBGL_COMPATIBILITY_ANGLE,
-      EGL_TRUE,
+      attributes.allowNativeTextureInterop ? EGL_FALSE : EGL_TRUE,
       EGL_CONTEXT_OPENGL_BACKWARDS_COMPATIBLE_ANGLE,
       EGL_FALSE,
       EGL_ROBUST_RESOURCE_INITIALIZATION_ANGLE,
@@ -481,6 +482,78 @@ bool Context::present() {
     return false;
   }
   return impl_->eglSwapBuffers(impl_->display, impl_->surface) == EGL_TRUE;
+}
+
+void *Context::nativeD3D11Device() {
+  if (!impl_ || !impl_->initialized) {
+    return nullptr;
+  }
+  auto queryDisplay =
+      impl_->loadEGL<PFNEGLQUERYDISPLAYATTRIBEXTPROC>("eglQueryDisplayAttribEXT");
+  auto queryDevice =
+      impl_->loadEGL<PFNEGLQUERYDEVICEATTRIBEXTPROC>("eglQueryDeviceAttribEXT");
+  if (!queryDisplay || !queryDevice) {
+    return nullptr;
+  }
+
+  EGLAttrib deviceValue = 0;
+  if (queryDisplay(impl_->display, EGL_DEVICE_EXT, &deviceValue) != EGL_TRUE) {
+    return nullptr;
+  }
+  EGLAttrib d3d11Device = 0;
+  if (queryDevice(reinterpret_cast<EGLDeviceEXT>(deviceValue),
+                  EGL_D3D11_DEVICE_ANGLE, &d3d11Device) != EGL_TRUE) {
+    return nullptr;
+  }
+  return reinterpret_cast<void *>(d3d11Device);
+}
+
+uint32_t Context::importD3D11Texture(void *nativeTexture) {
+  if (!impl_ || !impl_->initialized || !nativeTexture || !makeCurrent()) {
+    return 0;
+  }
+  auto createImage =
+      impl_->loadEGL<PFNEGLCREATEIMAGEKHRPROC>("eglCreateImageKHR");
+  auto destroyImage =
+      impl_->loadEGL<PFNEGLDESTROYIMAGEKHRPROC>("eglDestroyImageKHR");
+  auto imageTarget = impl_->loadGLES<PFNGLEGLIMAGETARGETTEXTURE2DOESPROC>(
+      "glEGLImageTargetTexture2DOES");
+  if (!createImage || !destroyImage || !imageTarget) {
+    impl_->error = "ANGLE is missing D3D11 EGL image entry points";
+    return 0;
+  }
+
+  const EGLint attributes[] = {EGL_TEXTURE_INTERNAL_FORMAT_ANGLE, GL_RGBA,
+                               EGL_NONE};
+  EGLImageKHR image = createImage(
+      impl_->display, EGL_NO_CONTEXT, EGL_D3D11_TEXTURE_ANGLE,
+      reinterpret_cast<EGLClientBuffer>(nativeTexture), attributes);
+  if (image == EGL_NO_IMAGE_KHR) {
+    impl_->error = "ANGLE could not create a D3D11 EGL image (EGL " +
+                   formatEGLError(impl_->eglGetError()) + ")";
+    return 0;
+  }
+
+  while (impl_->glGetError() != GL_NO_ERROR) {
+  }
+  GLuint texture = 0;
+  impl_->glGenTextures(1, &texture);
+  impl_->glBindTexture(GL_TEXTURE_2D, texture);
+  impl_->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  impl_->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  impl_->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  impl_->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  imageTarget(GL_TEXTURE_2D, image);
+  const GLenum error = impl_->glGetError();
+  destroyImage(impl_->display, image);
+  if (error != GL_NO_ERROR) {
+    std::ostringstream stream;
+    stream << "ANGLE could not bind the D3D11 EGL image (GL 0x" << std::hex
+           << std::uppercase << error << ")";
+    impl_->error = stream.str();
+    return 0;
+  }
+  return texture;
 }
 
 bool Context::isInitialized() const { return impl_ && impl_->initialized; }
@@ -910,6 +983,8 @@ bool Context::initialize(uint32_t, uint32_t, const ContextAttributes &,
 void Context::shutdown() {}
 bool Context::makeCurrent() { return false; }
 bool Context::present() { return false; }
+void *Context::nativeD3D11Device() { return nullptr; }
+uint32_t Context::importD3D11Texture(void *) { return 0; }
 bool Context::isInitialized() const { return false; }
 bool Context::isWindowSurface() const { return false; }
 const std::string &Context::errorMessage() const { return impl_->error; }

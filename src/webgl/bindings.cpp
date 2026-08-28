@@ -365,9 +365,12 @@ js::JSValueHandle createContextJSObject(js::Engine *engine, uint32_t width,
 
   auto context = std::make_unique<Context>();
   void *nativeWindow = !g_windowContextClaimed ? g_nativeWindow : nullptr;
-  if (!context->initialize(width, height, attributes, nativeWindow)) {
+  ContextAttributes contextAttributes = attributes;
+  contextAttributes.allowNativeTextureInterop = nativeWindow != nullptr;
+  if (!context->initialize(width, height, contextAttributes, nativeWindow)) {
     const std::string windowError = context->errorMessage();
-    if (!nativeWindow || !context->initialize(width, height, attributes)) {
+    contextAttributes.allowNativeTextureInterop = false;
+    if (!nativeWindow || !context->initialize(width, height, contextAttributes)) {
       std::cerr << "[WebGL] Context creation failed: "
                 << context->errorMessage() << std::endl;
       return engine->newNull();
