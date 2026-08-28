@@ -1,3 +1,6 @@
+# Agent scratch files
+.working/
+
 # Build directories
 build/
 build-*/

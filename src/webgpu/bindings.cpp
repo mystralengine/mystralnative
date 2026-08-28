@@ -41,6 +41,10 @@
 // Canvas 2D context (Skia-backed)
 #include "mystral/canvas/canvas2d.h"
 
+#ifdef MYSTRAL_HAS_WEBGL
+#include "mystral/webgl/context.h"
+#endif
+
 // Forward declaration for Canvas2D bindings
 namespace mystral {
 namespace canvas {
@@ -56,6 +60,10 @@ struct OffscreenCanvas {
     int height = 150;
     mystral::js::JSValueHandle context2d;  // Cached 2D context (created on first getContext call)
     bool hasContext2d = false;
+#ifdef MYSTRAL_HAS_WEBGL
+    mystral::js::JSValueHandle contextWebGL2;
+    bool hasContextWebGL2 = false;
+#endif
 };
 
 // Global storage for offscreen canvases (prevents them from being destroyed)
@@ -359,6 +367,12 @@ bool initBindings(js::Engine* engine, void* wgpuInstance, void* wgpuDevice, void
     g_verboseLogging = debug;
 
     g_engine = engine;
+#ifdef MYSTRAL_HAS_WEBGL
+    if (!webgl::initBindings(engine, debug)) {
+        std::cerr << "[WebGL] Failed to initialize JavaScript bindings" << std::endl;
+        return false;
+    }
+#endif
     g_instance = (WGPUInstance)wgpuInstance;
     g_device = (WGPUDevice)wgpuDevice;
     g_queue = (WGPUQueue)wgpuQueue;
@@ -447,6 +461,18 @@ bool initBindings(js::Engine* engine, void* wgpuInstance, void* wgpuDevice, void
 
                 return ctx2d;
             }
+
+#ifdef MYSTRAL_HAS_WEBGL
+            if (contextType == "webgl2") {
+                auto context = webgl::createContextJSObject(
+                    g_engine, g_canvasWidth, g_canvasHeight);
+                if (!g_engine->isNull(context)) {
+                    auto canvas = g_engine->getGlobalProperty("canvas");
+                    g_engine->setProperty(context, "canvas", canvas);
+                }
+                return context;
+            }
+#endif
 
             if (contextType != "webgpu") {
                 std::cerr << "[Canvas] Unknown context type: " << contextType << std::endl;
@@ -726,6 +752,37 @@ bool initBindings(js::Engine* engine, void* wgpuInstance, void* wgpuDevice, void
                         return canvas->context2d;
                     }
 
+#ifdef MYSTRAL_HAS_WEBGL
+                    if (contextType == "webgl2") {
+                        if (canvas->hasContextWebGL2) {
+                            return canvas->contextWebGL2;
+                        }
+
+                        std::string globalName = "__offscreenCanvas_" + std::to_string(canvasId);
+                        auto canvasElement = g_engine->getGlobalProperty(globalName.c_str());
+                        if (!g_engine->isNull(canvasElement) && !g_engine->isUndefined(canvasElement)) {
+                            auto widthProp = g_engine->getProperty(canvasElement, "width");
+                            auto heightProp = g_engine->getProperty(canvasElement, "height");
+                            if (!g_engine->isUndefined(widthProp)) {
+                                canvas->width = static_cast<int>(g_engine->toNumber(widthProp));
+                            }
+                            if (!g_engine->isUndefined(heightProp)) {
+                                canvas->height = static_cast<int>(g_engine->toNumber(heightProp));
+                            }
+                        }
+
+                        canvas->contextWebGL2 = webgl::createContextJSObject(
+                            g_engine, static_cast<uint32_t>(canvas->width),
+                            static_cast<uint32_t>(canvas->height));
+                        if (!g_engine->isNull(canvas->contextWebGL2)) {
+                            g_engine->setProperty(canvas->contextWebGL2, "canvas", canvasElement);
+                            canvas->hasContextWebGL2 = true;
+                            g_engine->protect(canvas->contextWebGL2);
+                        }
+                        return canvas->contextWebGL2;
+                    }
+#endif
+
                     if (contextType == "webgpu") {
                         // Create GPUCanvasContext for offscreen canvas
                         // This shares the main surface/device for simplicity
@@ -861,8 +918,8 @@ bool initBindings(js::Engine* engine, void* wgpuInstance, void* wgpuDevice, void
                         return canvasContext;
                     }
 
-                    // Ignore webgl requests silently (PixiJS feature detection)
-                    if (contextType == "webgl" || contextType == "webgl2" || contextType == "experimental-webgl") {
+                    // WebGL 1 is not exposed until its compatibility profile is implemented.
+                    if (contextType == "webgl" || contextType == "experimental-webgl") {
                         return g_engine->newNull();
                     }
 

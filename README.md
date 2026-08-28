@@ -98,6 +98,20 @@ cmake --build build --parallel
 ./build/mystral run examples/triangle.js
 ```
 
+### Experimental Windows WebGL 2
+
+The optional ANGLE backend accepts either a packaged `include/` + `bin/` root or the source layout from [higharc/headless-gl](https://github.com/higharc/headless-gl):
+
+```powershell
+cmake -B build `
+  -DMYSTRAL_USE_WEBGL=ON `
+  -DMYSTRAL_ANGLE_ROOT=C:\path\to\angle-runtime
+cmake --build build --config Release
+.\build\Release\mystral.exe run examples\webgl2-triangle.js
+```
+
+The current milestone supports WebGL 2 context creation, shaders, vertex buffers, drawing, GPU completion, and pixel readback through ANGLE/D3D11. Full WebGL API coverage and window-surface presentation remain in progress.
+
 ## What Can You Build?
 
 Here's a complete "Hello Triangle" — the traditional first GPU program:

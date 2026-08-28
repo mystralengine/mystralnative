@@ -36,6 +36,10 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(MYSTRAL_USE_DAWN "Use Dawn WebGPU implementation" ON)  # Default - best compatibility
 option(MYSTRAL_USE_WGPU "Use wgpu-native WebGPU implementation" OFF)  # Alternative - has iOS support
 
+# WebGL 2 compatibility (optional - ANGLE/D3D11 on Windows)
+option(MYSTRAL_USE_WEBGL "Enable ANGLE-backed WebGL 2 compatibility" OFF)
+set(MYSTRAL_ANGLE_ROOT "" CACHE PATH "ANGLE runtime root containing headers and Windows DLLs")
+
 # Ray Tracing (optional - hardware RT via DXR/Vulkan/Metal)
 option(MYSTRAL_USE_RAYTRACING "Enable hardware ray tracing support" OFF)
 
@@ -72,12 +76,47 @@ endif()
 message(STATUS "Mystral Platform: ${MYSTRAL_PLATFORM}")
 message(STATUS "JS Engine: V8=${MYSTRAL_USE_V8} JSC=${MYSTRAL_USE_JSC} QuickJS=${MYSTRAL_USE_QUICKJS}")
 message(STATUS "WebGPU: Dawn=${MYSTRAL_USE_DAWN} wgpu=${MYSTRAL_USE_WGPU}")
+message(STATUS "WebGL 2: ANGLE=${MYSTRAL_USE_WEBGL}")
 
 # ============================================================================
 # Third Party Dependencies
 # ============================================================================
 
 set(THIRD_PARTY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
+
+if(MYSTRAL_USE_WEBGL)
+    if(NOT WIN32)
+        message(FATAL_ERROR "MYSTRAL_USE_WEBGL currently supports Windows only")
+    endif()
+
+    if(NOT MYSTRAL_ANGLE_ROOT)
+        set(MYSTRAL_ANGLE_ROOT "${THIRD_PARTY_DIR}/angle")
+    endif()
+
+    set(MYSTRAL_ANGLE_INCLUDE_DIR "${MYSTRAL_ANGLE_ROOT}/include")
+    if(EXISTS "${MYSTRAL_ANGLE_ROOT}/src/native/angle-includes/EGL/egl.h")
+        set(MYSTRAL_ANGLE_INCLUDE_DIR "${MYSTRAL_ANGLE_ROOT}/src/native/angle-includes")
+    endif()
+
+    set(MYSTRAL_ANGLE_RUNTIME_DIR "${MYSTRAL_ANGLE_ROOT}/bin")
+    if(EXISTS "${MYSTRAL_ANGLE_ROOT}/deps/windows/dll/libEGL.dll")
+        set(MYSTRAL_ANGLE_RUNTIME_DIR "${MYSTRAL_ANGLE_ROOT}/deps/windows/dll")
+    endif()
+
+    foreach(ANGLE_HEADER "EGL/egl.h" "EGL/eglext.h" "EGL/eglext_angle.h" "GLES3/gl3.h")
+        if(NOT EXISTS "${MYSTRAL_ANGLE_INCLUDE_DIR}/${ANGLE_HEADER}")
+            message(FATAL_ERROR "Missing ANGLE header: ${MYSTRAL_ANGLE_INCLUDE_DIR}/${ANGLE_HEADER}")
+        endif()
+    endforeach()
+    foreach(ANGLE_DLL "libEGL.dll" "libGLESv2.dll" "d3dcompiler_47.dll")
+        if(NOT EXISTS "${MYSTRAL_ANGLE_RUNTIME_DIR}/${ANGLE_DLL}")
+            message(FATAL_ERROR "Missing ANGLE runtime: ${MYSTRAL_ANGLE_RUNTIME_DIR}/${ANGLE_DLL}")
+        endif()
+    endforeach()
+
+    message(STATUS "ANGLE headers: ${MYSTRAL_ANGLE_INCLUDE_DIR}")
+    message(STATUS "ANGLE runtime: ${MYSTRAL_ANGLE_RUNTIME_DIR}")
+endif()
 
 # SDL3 - Build from source as static library for single-binary distribution
 set(SDL3_DIR ${THIRD_PARTY_DIR}/sdl3)
@@ -1008,6 +1047,13 @@ set(MYSTRAL_SOURCES
     src/video/gpu_readback_recorder.cpp
 )
 
+if(MYSTRAL_USE_WEBGL)
+    list(APPEND MYSTRAL_SOURCES
+        src/webgl/context.cpp
+        src/webgl/bindings.cpp
+    )
+endif()
+
 # Ray tracing sources (conditional)
 if(MYSTRAL_USE_RAYTRACING)
     list(APPEND MYSTRAL_SOURCES
@@ -1053,6 +1099,11 @@ target_include_directories(mystral-runtime PRIVATE
     ${THIRD_PARTY_DIR}/stb
     ${THIRD_PARTY_DIR}/cgltf
 )
+
+if(MYSTRAL_USE_WEBGL)
+    target_include_directories(mystral-runtime PRIVATE ${MYSTRAL_ANGLE_INCLUDE_DIR})
+    target_compile_definitions(mystral-runtime PUBLIC MYSTRAL_HAS_WEBGL)
+endif()
 
 # Pass build configuration to source code
 # Determine JS engine name
@@ -1369,6 +1420,16 @@ endif()
 if(NOT MYSTRAL_PLATFORM STREQUAL "ios" AND NOT MYSTRAL_PLATFORM STREQUAL "android")
     add_executable(mystral src/cli/main.cpp)
     target_link_libraries(mystral PRIVATE mystral-runtime)
+
+    if(MYSTRAL_USE_WEBGL)
+        foreach(ANGLE_DLL "libEGL.dll" "libGLESv2.dll" "d3dcompiler_47.dll")
+            add_custom_command(TARGET mystral POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${MYSTRAL_ANGLE_RUNTIME_DIR}/${ANGLE_DLL}"
+                    "$<TARGET_FILE_DIR:mystral>/${ANGLE_DLL}"
+            )
+        endforeach()
+    endif()
 
     # Add webp include directories and definitions for video recording
     if(TARGET webp::mux)
