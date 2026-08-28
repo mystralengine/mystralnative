@@ -98,6 +98,26 @@ static WGPUSurface g_surface = nullptr;
 static WGPUInstance g_instance = nullptr;
 static js::Engine* g_engine = nullptr;
 
+static js::JSValueHandle createStyleObject() {
+    auto style = g_engine->newObject();
+    g_engine->setProperty(style, "setProperty",
+        g_engine->newFunction("setProperty", [](void* ctx, const std::vector<js::JSValueHandle>& args) {
+            return g_engine->newUndefined();
+        })
+    );
+    g_engine->setProperty(style, "removeProperty",
+        g_engine->newFunction("removeProperty", [](void* ctx, const std::vector<js::JSValueHandle>& args) {
+            return g_engine->newUndefined();
+        })
+    );
+    g_engine->setProperty(style, "getPropertyValue",
+        g_engine->newFunction("getPropertyValue", [](void* ctx, const std::vector<js::JSValueHandle>& args) {
+            return g_engine->newString("");
+        })
+    );
+    return style;
+}
+
 // Offscreen rendering support (for no-SDL mode)
 static WGPUTexture g_offscreenTexture = nullptr;
 static WGPUTextureView g_offscreenTextureView = nullptr;
@@ -392,7 +412,7 @@ bool initBindings(js::Engine* engine, void* wgpuInstance, void* wgpuDevice, void
     // Create a mock parent element for the canvas (needed by Debugger)
     // ========================================================================
     auto parentElement = engine->newObject();
-    engine->setProperty(parentElement, "style", engine->newObject());
+    engine->setProperty(parentElement, "style", createStyleObject());
     engine->setProperty(parentElement, "appendChild",
         engine->newFunction("appendChild", [](void* ctx, const std::vector<js::JSValueHandle>& args) {
             // No-op in native runtime
@@ -435,6 +455,7 @@ bool initBindings(js::Engine* engine, void* wgpuInstance, void* wgpuDevice, void
     engine->setProperty(canvasObject, "dataset", engine->newObject());
 
     // canvas.parentElement - mock parent element (for Debugger compatibility)
+    engine->setProperty(canvasObject, "style", createStyleObject());
     engine->setProperty(canvasObject, "parentElement", parentElement);
 
     // canvas.getContext('webgpu') -> GPUCanvasContext
@@ -465,12 +486,18 @@ bool initBindings(js::Engine* engine, void* wgpuInstance, void* wgpuDevice, void
 
 #ifdef MYSTRAL_HAS_WEBGL
             if (contextType == "webgl2") {
+                auto canvas = g_engine->getGlobalProperty("canvas");
+                auto cached = g_engine->getProperty(canvas, "_contextWebGL2");
+                if (!g_engine->isUndefined(cached) && !g_engine->isNull(cached)) {
+                    return cached;
+                }
+
                 auto context = webgl::createContextJSObject(
                     g_engine, g_canvasWidth, g_canvasHeight,
                     webgl::contextAttributesFromJS(g_engine, args));
                 if (!g_engine->isNull(context)) {
-                    auto canvas = g_engine->getGlobalProperty("canvas");
                     g_engine->setProperty(context, "canvas", canvas);
+                    g_engine->setProperty(canvas, "_contextWebGL2", context);
                 }
                 return context;
             }
@@ -637,6 +664,32 @@ bool initBindings(js::Engine* engine, void* wgpuInstance, void* wgpuDevice, void
         })
     );
 
+    engine->setProperty(existingDocument, "getElementsByClassName",
+        engine->newFunction("getElementsByClassName", [](void* ctx, const std::vector<js::JSValueHandle>& args) {
+            auto result = g_engine->newArray(1);
+            auto element = g_engine->newObject();
+            g_engine->setProperty(element, "style", createStyleObject());
+            g_engine->setPropertyIndex(result, 0, element);
+            return result;
+        })
+    );
+    engine->setProperty(existingDocument, "querySelectorAll",
+        engine->newFunction("querySelectorAll", [](void* ctx, const std::vector<js::JSValueHandle>& args) {
+            if (args.empty() || g_engine->toString(args[0]).empty()) {
+                return g_engine->newArray(0);
+            }
+            std::string selector = g_engine->toString(args[0]);
+            if (selector[0] != '.') {
+                return g_engine->newArray(0);
+            }
+            auto result = g_engine->newArray(1);
+            auto element = g_engine->newObject();
+            g_engine->setProperty(element, "style", createStyleObject());
+            g_engine->setPropertyIndex(result, 0, element);
+            return result;
+        })
+    );
+
     // Add createElement to existing document
     // NOTE: runtime.cpp sets up a createElement with canvas support (toDataURL) for @loaders.gl WebP detection
     // We ALWAYS override it here to add proper Canvas 2D support for offscreen canvases
@@ -651,7 +704,7 @@ bool initBindings(js::Engine* engine, void* wgpuInstance, void* wgpuDevice, void
             }
 
             // Add basic DOM element properties
-            g_engine->setProperty(element, "style", g_engine->newObject());
+            g_engine->setProperty(element, "style", createStyleObject());
             g_engine->setProperty(element, "dataset", g_engine->newObject());
             g_engine->setProperty(element, "className", g_engine->newString(""));
             g_engine->setProperty(element, "innerHTML", g_engine->newString(""));
@@ -660,6 +713,11 @@ bool initBindings(js::Engine* engine, void* wgpuInstance, void* wgpuDevice, void
             g_engine->setProperty(element, "appendChild",
                 g_engine->newFunction("appendChild", [](void* c, const std::vector<js::JSValueHandle>& a) {
                     return a.empty() ? g_engine->newUndefined() : a[0];
+                })
+            );
+            g_engine->setProperty(element, "append",
+                g_engine->newFunction("append", [](void* c, const std::vector<js::JSValueHandle>& a) {
+                    return g_engine->newUndefined();
                 })
             );
             g_engine->setProperty(element, "removeChild",
@@ -982,6 +1040,40 @@ bool initBindings(js::Engine* engine, void* wgpuInstance, void* wgpuDevice, void
             return g_engine->call(createElement, document, {args[1]});
         })
     );
+    engine->setProperty(existingDocument, "createComment",
+        engine->newFunction("createComment", [](void* ctx, const std::vector<js::JSValueHandle>& args) {
+            auto comment = g_engine->newObject();
+            std::string text = args.empty() ? "" : g_engine->toString(args[0]);
+            g_engine->setProperty(comment, "nodeType", g_engine->newNumber(8));
+            g_engine->setProperty(comment, "data", g_engine->newString(text.c_str()));
+            g_engine->setProperty(comment, "textContent", g_engine->newString(text.c_str()));
+            g_engine->setProperty(comment, "remove",
+                g_engine->newFunction("remove", [](void* c, const std::vector<js::JSValueHandle>& a) {
+                    return g_engine->newUndefined();
+                })
+            );
+            return comment;
+        })
+    );
+    engine->setProperty(existingDocument, "createDocumentFragment",
+        engine->newFunction("createDocumentFragment", [](void* ctx, const std::vector<js::JSValueHandle>& args) {
+            auto fragment = g_engine->newObject();
+            g_engine->setProperty(fragment, "nodeType", g_engine->newNumber(11));
+            g_engine->setProperty(fragment, "childNodes", g_engine->newArray(0));
+            g_engine->setProperty(fragment, "children", g_engine->newArray(0));
+            g_engine->setProperty(fragment, "append",
+                g_engine->newFunction("append", [](void* c, const std::vector<js::JSValueHandle>& a) {
+                    return g_engine->newUndefined();
+                })
+            );
+            return fragment;
+        })
+    );
+    engine->setProperty(existingDocument, "importNode",
+        engine->newFunction("importNode", [](void* ctx, const std::vector<js::JSValueHandle>& args) {
+            return args.empty() ? g_engine->newNull() : args[0];
+        })
+    );
 
     // Add document.body if not present, or enhance existing body with required methods
     auto existingBody = engine->getProperty(existingDocument, "body");
@@ -990,7 +1082,11 @@ bool initBindings(js::Engine* engine, void* wgpuInstance, void* wgpuDevice, void
         engine->setProperty(existingDocument, "body", existingBody);
     }
     // Always add/update these methods on body
-    engine->setProperty(existingBody, "style", engine->newObject());
+    engine->setProperty(existingBody, "style", createStyleObject());
+    auto documentElement = engine->getProperty(existingDocument, "documentElement");
+    if (!engine->isUndefined(documentElement) && !engine->isNull(documentElement)) {
+        engine->setProperty(documentElement, "style", createStyleObject());
+    }
     engine->setProperty(existingBody, "appendChild",
         engine->newFunction("appendChild", [](void* ctx, const std::vector<js::JSValueHandle>& args) {
             return args.empty() ? g_engine->newUndefined() : args[0];
@@ -1015,6 +1111,8 @@ bool initBindings(js::Engine* engine, void* wgpuInstance, void* wgpuDevice, void
     // PixiJS and other libraries check these for feature detection
     engine->setProperty(navigatorHandle, "userAgent",
         engine->newString("Mozilla/5.0 (Macintosh; MystralNative/0.1) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"));
+    engine->setProperty(navigatorHandle, "appVersion",
+        engine->newString("5.0 (MystralNative/0.1)"));
     engine->setProperty(navigatorHandle, "platform", engine->newString("MystralNative"));
     engine->setProperty(navigatorHandle, "vendor", engine->newString("Mystral Engine"));
     engine->setProperty(navigatorHandle, "language", engine->newString("en-US"));
@@ -4415,6 +4513,117 @@ async function createImageBitmap(source, options) {
 globalThis.createImageBitmap = createImageBitmap;
 globalThis.ImageBitmap = ImageBitmap;
 
+class FileReader {
+    constructor() {
+        this.result = null;
+        this.error = null;
+        this.readyState = FileReader.EMPTY;
+        this.onload = null;
+        this.onerror = null;
+        this.onloadend = null;
+        this._listeners = new Map();
+    }
+
+    addEventListener(type, callback) {
+        const listeners = this._listeners.get(type) || [];
+        listeners.push(callback);
+        this._listeners.set(type, listeners);
+    }
+
+    removeEventListener(type, callback) {
+        const listeners = this._listeners.get(type) || [];
+        this._listeners.set(type, listeners.filter(listener => listener !== callback));
+    }
+
+    _dispatch(type) {
+        const event = { type, target: this };
+        if (typeof this['on' + type] === 'function') this['on' + type](event);
+        for (const listener of this._listeners.get(type) || []) listener(event);
+    }
+
+    async _read(source, transform) {
+        this.readyState = FileReader.LOADING;
+        try {
+            const value = source && typeof source.arrayBuffer === 'function'
+                ? await source.arrayBuffer()
+                : source;
+            this.result = await transform(value);
+            this.readyState = FileReader.DONE;
+            this._dispatch('load');
+        } catch (error) {
+            this.error = error;
+            this.readyState = FileReader.DONE;
+            this._dispatch('error');
+        }
+        this._dispatch('loadend');
+    }
+
+    readAsArrayBuffer(source) {
+        return this._read(source, value => value instanceof ArrayBuffer ? value : value?.buffer);
+    }
+
+    readAsText(source) {
+        return this._read(source, value => new TextDecoder().decode(value));
+    }
+
+    readAsDataURL(source) {
+        return this._read(source, value => {
+            const bytes = new Uint8Array(value);
+            let binary = '';
+            for (const byte of bytes) binary += String.fromCharCode(byte);
+            return 'data:application/octet-stream;base64,' + btoa(binary);
+        });
+    }
+
+    abort() {
+        this.readyState = FileReader.DONE;
+        this._dispatch('abort');
+        this._dispatch('loadend');
+    }
+}
+FileReader.EMPTY = 0;
+FileReader.LOADING = 1;
+FileReader.DONE = 2;
+globalThis.FileReader = FileReader;
+
+if (typeof globalThis.Node === 'undefined') {
+    globalThis.Node = class Node {};
+}
+if (!Object.getOwnPropertyDescriptor(Node.prototype, 'firstChild')) {
+    Object.defineProperty(Node.prototype, 'firstChild', {
+        configurable: true,
+        get() { return this.childNodes?.[0] ?? this.children?.[0] ?? null; }
+    });
+}
+if (!Object.getOwnPropertyDescriptor(Node.prototype, 'nextSibling')) {
+    Object.defineProperty(Node.prototype, 'nextSibling', {
+        configurable: true,
+        get() {
+            const siblings = this.parentNode?.childNodes || this.parentNode?.children || [];
+            const index = Array.prototype.indexOf.call(siblings, this);
+            return index >= 0 ? siblings[index + 1] ?? null : null;
+        }
+    });
+}
+if (typeof Node.prototype.remove !== 'function') {
+    Node.prototype.remove = function() { this.parentNode?.removeChild?.(this); };
+}
+if (typeof globalThis.Text === 'undefined') {
+    globalThis.Text = class Text extends Node {};
+}
+if (typeof globalThis.Comment === 'undefined') {
+    globalThis.Comment = class Comment extends Node {};
+}
+if (typeof globalThis.DocumentFragment === 'undefined') {
+    globalThis.DocumentFragment = class DocumentFragment extends Node {};
+}
+if (typeof globalThis.Element === 'undefined') {
+    globalThis.Element = class Element extends Node {};
+}
+if (typeof globalThis.HTMLElement === 'undefined') {
+    globalThis.HTMLElement = class HTMLElement extends Element {};
+}
+
 // CanvasRenderingContext2D - Placeholder class for instanceof checks
 // The actual implementation is in Canvas2D bindings, this is just for type checking
 class CanvasRenderingContext2D {
@@ -4425,8 +4634,8 @@ class CanvasRenderingContext2D {
 globalThis.CanvasRenderingContext2D = CanvasRenderingContext2D;
 
 // HTMLCanvasElement - Placeholder class for instanceof checks
-class HTMLCanvasElement {
-    constructor() {}
+class HTMLCanvasElement extends HTMLElement {
+    constructor() { super(); }
 }
 globalThis.HTMLCanvasElement = HTMLCanvasElement;
 
