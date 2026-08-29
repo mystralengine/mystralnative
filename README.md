@@ -98,9 +98,17 @@ cmake --build build --parallel
 ./build/mystral run examples/triangle.js
 ```
 
-### Experimental Windows WebGL 2
+### Experimental Desktop WebGL 2
 
-The optional ANGLE backend accepts either a packaged `include/` + `bin/` root or the source layout from [higharc/headless-gl](https://github.com/higharc/headless-gl):
+The optional ANGLE backend supports Windows (D3D11), Linux (Vulkan with X11 or Wayland), and macOS (Metal). Set `MYSTRAL_ANGLE_ROOT` to a package containing `include/EGL`, `include/GLES2`, `include/GLES3`, and `include/KHR`, plus the platform runtime libraries under `bin/` on Windows or `lib/` on Linux and macOS. Linux hosts also need a Vulkan loader, Vulkan driver, and XCB runtime; Wayland presentation additionally uses the system Wayland runtime libraries.
+
+```bash
+cmake -B build \
+  -DMYSTRAL_USE_WEBGL=ON \
+  -DMYSTRAL_ANGLE_ROOT=/path/to/angle-runtime
+cmake --build build --parallel
+./build/mystral run examples/webgl2-triangle.js
+```
 
 ```powershell
 cmake -B build `
@@ -110,7 +118,7 @@ cmake --build build --config Release
 .\build\Release\mystral.exe run examples\webgl2-triangle.js
 ```
 
-The current milestone supports WebGL 2 context creation, shaders, buffers, textures, framebuffers, uniforms, instancing, GPU completion, pixel readback, and automatic SDL window presentation through ANGLE/D3D11. The observed API surface of an unchanged Three.js r181 texture, shadow, render-target, and instancing workload is covered. The first WebGL context owns the native window surface; full WebGL IDL coverage and multi-canvas compositing remain in progress.
+The current milestone supports WebGL 2 context creation, shaders, buffers, textures, framebuffers, uniforms, instancing, GPU completion, pixel readback, and automatic SDL window presentation. Linux supports X11 and Wayland window surfaces plus a headless pbuffer fallback. macOS presents ANGLE through a dedicated Core Animation layer so its Metal surface does not replace Dawn's `CAMetalLayer`. The observed API surface of an unchanged Three.js r181 texture, shadow, render-target, and instancing workload is covered. The first WebGL context owns the native window surface; full WebGL IDL coverage and multi-canvas compositing remain in progress.
 
 Native HTML template parsing is available through [Lexbor v3](https://github.com/lexbor/lexbor). `MYSTRAL_USE_LEXBOR=ON` is the default when `third_party/lexbor` is present; run `node scripts/download-deps.mjs --only lexbor` to download the pinned source.
 

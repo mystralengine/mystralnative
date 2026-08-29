@@ -1,10 +1,20 @@
 #include "mystral/webgl/context.h"
 
-#if defined(_WIN32) && defined(MYSTRAL_HAS_WEBGL)
+#if defined(MYSTRAL_HAS_WEBGL)
 
+#if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#else
+#include <dlfcn.h>
+#include <limits.h>
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#else
+#include <unistd.h>
+#endif
+#endif
 
 #define EGL_EGL_PROTOTYPES 0
 #define GL_GLES_PROTOTYPES 0
@@ -15,6 +25,8 @@
 #include <GLES2/gl2ext.h>
 
 #include <algorithm>
+#include <cstdlib>
+#include <filesystem>
 #include <iomanip>
 #include <sstream>
 
@@ -22,34 +34,147 @@ namespace mystral::webgl {
 
 namespace {
 
+#if defined(_WIN32)
+using RuntimeLibrary = HMODULE;
+#else
+using RuntimeLibrary = void *;
+#endif
+
 std::string formatEGLError(EGLint error) {
   std::ostringstream stream;
   stream << "0x" << std::hex << std::uppercase << error;
   return stream.str();
 }
 
-HMODULE loadRuntimeLibrary(const wchar_t *filename) {
-  wchar_t executablePath[MAX_PATH] = {};
-  const DWORD length = GetModuleFileNameW(nullptr, executablePath, MAX_PATH);
-  if (length > 0 && length < MAX_PATH) {
-    std::wstring path(executablePath, length);
-    const size_t separator = path.find_last_of(L"\\/");
-    if (separator != std::wstring::npos) {
-      path.resize(separator + 1);
-      path.append(filename);
-      if (HMODULE module = LoadLibraryW(path.c_str())) {
-        return module;
-      }
+std::filesystem::path executableDirectory() {
+#if defined(_WIN32)
+  std::wstring path(MAX_PATH, L'\0');
+  const DWORD length = GetModuleFileNameW(nullptr, path.data(), MAX_PATH);
+  if (length == 0 || length >= MAX_PATH) {
+    return {};
+  }
+  path.resize(length);
+  return std::filesystem::path(path).parent_path();
+#elif defined(__APPLE__)
+  uint32_t size = 0;
+  _NSGetExecutablePath(nullptr, &size);
+  std::string path(size, '\0');
+  if (_NSGetExecutablePath(path.data(), &size) != 0) {
+    return {};
+  }
+  path.resize(std::char_traits<char>::length(path.c_str()));
+  return std::filesystem::weakly_canonical(path).parent_path();
+#else
+  std::string path(PATH_MAX, '\0');
+  const ssize_t length = readlink("/proc/self/exe", path.data(), path.size());
+  if (length <= 0) {
+    return {};
+  }
+  path.resize(static_cast<size_t>(length));
+  return std::filesystem::path(path).parent_path();
+#endif
+}
+
+RuntimeLibrary openRuntimeLibrary(const std::filesystem::path &path) {
+#if defined(_WIN32)
+  return LoadLibraryW(path.wstring().c_str());
+#else
+  return dlopen(path.c_str(), RTLD_NOW | RTLD_GLOBAL);
+#endif
+}
+
+RuntimeLibrary loadRuntimeLibrary(const char *filename) {
+  if (const char *runtimeDirectory =
+          std::getenv("MYSTRAL_ANGLE_RUNTIME_DIR")) {
+    if (RuntimeLibrary module = openRuntimeLibrary(
+            std::filesystem::path(runtimeDirectory) / filename)) {
+      return module;
     }
   }
-  return LoadLibraryW(filename);
+  const auto directory = executableDirectory();
+  if (!directory.empty()) {
+    if (RuntimeLibrary module =
+            openRuntimeLibrary(directory / std::filesystem::path(filename))) {
+      return module;
+    }
+  }
+  return openRuntimeLibrary(filename);
+}
+
+void *findRuntimeSymbol(RuntimeLibrary module, const char *name) {
+#if defined(_WIN32)
+  return reinterpret_cast<void *>(GetProcAddress(module, name));
+#else
+  return dlsym(module, name);
+#endif
+}
+
+void closeRuntimeLibrary(RuntimeLibrary module) {
+  if (!module) {
+    return;
+  }
+#if defined(_WIN32)
+  FreeLibrary(module);
+#else
+  dlclose(module);
+#endif
+}
+
+const char *eglLibraryName() {
+#if defined(_WIN32)
+  return "libEGL.dll";
+#elif defined(__APPLE__)
+  return "libEGL.dylib";
+#else
+  return "libEGL.so";
+#endif
+}
+
+const char *glesLibraryName() {
+#if defined(_WIN32)
+  return "libGLESv2.dll";
+#elif defined(__APPLE__)
+  return "libGLESv2.dylib";
+#else
+  return "libGLESv2.so";
+#endif
+}
+
+const char *backendName(NativeWindowPlatform platform) {
+  switch (platform) {
+  case NativeWindowPlatform::Win32:
+    return "D3D11";
+  case NativeWindowPlatform::Metal:
+    return "Metal";
+  case NativeWindowPlatform::X11:
+    return "Vulkan/X11";
+  case NativeWindowPlatform::Wayland:
+    return "Vulkan/Wayland";
+  case NativeWindowPlatform::None:
+#if defined(_WIN32)
+    return "D3D11";
+#elif defined(__APPLE__)
+    return "Metal";
+#else
+    return "Vulkan/headless";
+#endif
+  }
+  return "unknown";
+}
+
+EGLNativeWindowType toEGLNativeWindow(uintptr_t window) {
+#if defined(_WIN32) || defined(__APPLE__)
+  return reinterpret_cast<EGLNativeWindowType>(window);
+#else
+  return static_cast<EGLNativeWindowType>(window);
+#endif
 }
 
 } // namespace
 
 struct Context::Impl {
-  HMODULE eglModule = nullptr;
-  HMODULE glesModule = nullptr;
+  RuntimeLibrary eglModule = nullptr;
+  RuntimeLibrary glesModule = nullptr;
 
   EGLDisplay display = EGL_NO_DISPLAY;
   EGLConfig config = nullptr;
@@ -76,6 +201,7 @@ struct Context::Impl {
   PFNEGLSWAPINTERVALPROC eglSwapInterval = nullptr;
   PFNEGLDESTROYSURFACEPROC eglDestroySurface = nullptr;
   PFNEGLDESTROYCONTEXTPROC eglDestroyContext = nullptr;
+  PFNEGLTERMINATEPROC eglTerminate = nullptr;
   PFNEGLGETERRORPROC eglGetError = nullptr;
 
   PFNGLGETSTRINGPROC glGetString = nullptr;
@@ -152,7 +278,8 @@ struct Context::Impl {
   PFNGLVIEWPORTPROC glViewport = nullptr;
 
   template <typename Function> Function loadEGL(const char *name) {
-    auto function = reinterpret_cast<Function>(GetProcAddress(eglModule, name));
+    auto function =
+        reinterpret_cast<Function>(findRuntimeSymbol(eglModule, name));
     if (!function && eglGetProcAddress) {
       function = reinterpret_cast<Function>(eglGetProcAddress(name));
     }
@@ -161,7 +288,7 @@ struct Context::Impl {
 
   template <typename Function> Function loadGLES(const char *name) {
     auto function =
-        reinterpret_cast<Function>(GetProcAddress(glesModule, name));
+        reinterpret_cast<Function>(findRuntimeSymbol(glesModule, name));
     if (!function && eglGetProcAddress) {
       function = reinterpret_cast<Function>(eglGetProcAddress(name));
     }
@@ -177,15 +304,16 @@ struct Context::Impl {
   }
 
   bool loadLibraries() {
-    eglModule = loadRuntimeLibrary(L"libEGL.dll");
-    glesModule = loadRuntimeLibrary(L"libGLESv2.dll");
+    glesModule = loadRuntimeLibrary(glesLibraryName());
+    eglModule = loadRuntimeLibrary(eglLibraryName());
     if (!eglModule || !glesModule) {
-      return fail("Could not load ANGLE libEGL.dll and libGLESv2.dll beside "
-                  "mystral.exe");
+      return fail(std::string("Could not load ANGLE ") + eglLibraryName() +
+                  " and " + glesLibraryName() +
+                  " beside the Mystral executable");
     }
 
     eglGetProcAddress = reinterpret_cast<PFNEGLGETPROCADDRESSPROC>(
-        GetProcAddress(eglModule, "eglGetProcAddress"));
+        findRuntimeSymbol(eglModule, "eglGetProcAddress"));
     if (!eglGetProcAddress) {
       return fail("ANGLE did not export eglGetProcAddress");
     }
@@ -203,6 +331,7 @@ struct Context::Impl {
     LOAD_EGL(eglSwapInterval);
     LOAD_EGL(eglDestroySurface);
     LOAD_EGL(eglDestroyContext);
+    LOAD_EGL(eglTerminate);
     LOAD_EGL(eglGetError);
 #undef LOAD_EGL
 
@@ -210,7 +339,7 @@ struct Context::Impl {
         !eglCreateContext || !eglCreatePbufferSurface ||
         !eglCreateWindowSurface || !eglMakeCurrent || !eglSwapBuffers ||
         !eglSwapInterval || !eglDestroySurface || !eglDestroyContext ||
-        !eglGetError) {
+        !eglTerminate || !eglGetError) {
       return fail("ANGLE is missing a required EGL entry point");
     }
     return true;
@@ -310,7 +439,7 @@ Context::~Context() { shutdown(); }
 
 bool Context::initialize(uint32_t width, uint32_t height,
                          const ContextAttributes &attributes,
-                         void *nativeWindow) {
+                         const NativeWindow &nativeWindow) {
   shutdown();
   impl_ = std::make_unique<Impl>();
 
@@ -322,22 +451,47 @@ bool Context::initialize(uint32_t width, uint32_t height,
   }
 
   if (impl_->eglGetPlatformDisplayEXT) {
-    const EGLint displayAttributes[] = {
+    EGLint renderer = EGL_PLATFORM_ANGLE_TYPE_VULKAN_ANGLE;
+    EGLint nativePlatform = EGL_PLATFORM_SURFACELESS_MESA;
+    void *nativeDisplay = nullptr;
+#if defined(_WIN32)
+    renderer = EGL_PLATFORM_ANGLE_TYPE_D3D11_ANGLE;
+    nativePlatform = 0;
+#elif defined(__APPLE__)
+    renderer = EGL_PLATFORM_ANGLE_TYPE_METAL_ANGLE;
+    nativePlatform = 0;
+#else
+    if (nativeWindow.platform == NativeWindowPlatform::X11) {
+      nativePlatform = EGL_PLATFORM_X11_EXT;
+      nativeDisplay = nativeWindow.display;
+    } else if (nativeWindow.platform == NativeWindowPlatform::Wayland) {
+      nativePlatform = EGL_PLATFORM_WAYLAND_EXT;
+      nativeDisplay = nativeWindow.display;
+    }
+#endif
+
+    std::vector<EGLint> displayAttributes = {
         EGL_PLATFORM_ANGLE_TYPE_ANGLE,
-        EGL_PLATFORM_ANGLE_TYPE_D3D11_ANGLE,
+        renderer,
         EGL_POWER_PREFERENCE_ANGLE,
         attributes.preferHighPerformance ? EGL_HIGH_POWER_ANGLE
                                          : EGL_LOW_POWER_ANGLE,
-        EGL_NONE,
     };
+    if (nativePlatform != 0) {
+      displayAttributes.push_back(
+          EGL_PLATFORM_ANGLE_NATIVE_PLATFORM_TYPE_ANGLE);
+      displayAttributes.push_back(nativePlatform);
+    }
+    displayAttributes.push_back(EGL_NONE);
     impl_->display = impl_->eglGetPlatformDisplayEXT(
-        EGL_PLATFORM_ANGLE_ANGLE, EGL_DEFAULT_DISPLAY, displayAttributes);
+        EGL_PLATFORM_ANGLE_ANGLE, nativeDisplay, displayAttributes.data());
   }
   if (impl_->display == EGL_NO_DISPLAY) {
     impl_->display = impl_->eglGetDisplay(EGL_DEFAULT_DISPLAY);
   }
   if (impl_->display == EGL_NO_DISPLAY) {
-    return impl_->fail("Could not acquire an ANGLE D3D11 display");
+    return impl_->fail(std::string("Could not acquire an ANGLE ") +
+                       backendName(nativeWindow.platform) + " display");
   }
 
   if (!impl_->eglInitialize(impl_->display, nullptr, nullptr)) {
@@ -397,7 +551,7 @@ bool Context::initialize(uint32_t width, uint32_t height,
   if (nativeWindow) {
     impl_->surface = impl_->eglCreateWindowSurface(
         impl_->display, impl_->config,
-        reinterpret_cast<EGLNativeWindowType>(nativeWindow), nullptr);
+        toEGLNativeWindow(nativeWindow.window), nullptr);
     impl_->windowSurface = impl_->surface != EGL_NO_SURFACE;
   } else {
     const EGLint surfaceAttributes[] = {
@@ -455,6 +609,9 @@ void Context::shutdown() {
       impl_->context != EGL_NO_CONTEXT) {
     impl_->eglDestroyContext(impl_->display, impl_->context);
   }
+  if (impl_->eglTerminate && impl_->display != EGL_NO_DISPLAY) {
+    impl_->eglTerminate(impl_->display);
+  }
   impl_->surface = EGL_NO_SURFACE;
   impl_->context = EGL_NO_CONTEXT;
   impl_->display = EGL_NO_DISPLAY;
@@ -462,13 +619,13 @@ void Context::shutdown() {
   impl_->initialized = false;
   impl_->windowSurface = false;
 
-  if (impl_->glesModule) {
-    FreeLibrary(impl_->glesModule);
-    impl_->glesModule = nullptr;
-  }
   if (impl_->eglModule) {
-    FreeLibrary(impl_->eglModule);
+    closeRuntimeLibrary(impl_->eglModule);
     impl_->eglModule = nullptr;
+  }
+  if (impl_->glesModule) {
+    closeRuntimeLibrary(impl_->glesModule);
+    impl_->glesModule = nullptr;
   }
 }
 
@@ -487,6 +644,7 @@ bool Context::present() {
 }
 
 void *Context::nativeD3D11Device() {
+#if defined(_WIN32)
   if (!impl_ || !impl_->initialized) {
     return nullptr;
   }
@@ -508,9 +666,13 @@ void *Context::nativeD3D11Device() {
     return nullptr;
   }
   return reinterpret_cast<void *>(d3d11Device);
+#else
+  return nullptr;
+#endif
 }
 
 uint32_t Context::importD3D11Texture(void *nativeTexture) {
+#if defined(_WIN32)
   if (!impl_ || !impl_->initialized || !nativeTexture || !makeCurrent()) {
     return 0;
   }
@@ -556,6 +718,10 @@ uint32_t Context::importD3D11Texture(void *nativeTexture) {
     return 0;
   }
   return texture;
+#else
+  (void)nativeTexture;
+  return 0;
+#endif
 }
 
 bool Context::isInitialized() const { return impl_ && impl_->initialized; }
@@ -972,14 +1138,13 @@ uint32_t Context::getError() {
 namespace mystral::webgl {
 
 struct Context::Impl {
-  std::string error =
-      "ANGLE WebGL2 is only available in enabled Windows builds";
+  std::string error = "ANGLE WebGL2 is not enabled in this build";
 };
 
 Context::Context() : impl_(std::make_unique<Impl>()) {}
 Context::~Context() = default;
 bool Context::initialize(uint32_t, uint32_t, const ContextAttributes &,
-                         void *) {
+                         const NativeWindow &) {
   return false;
 }
 void Context::shutdown() {}

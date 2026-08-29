@@ -36,9 +36,9 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(MYSTRAL_USE_DAWN "Use Dawn WebGPU implementation" ON)  # Default - best compatibility
 option(MYSTRAL_USE_WGPU "Use wgpu-native WebGPU implementation" OFF)  # Alternative - has iOS support
 
-# WebGL 2 compatibility (optional - ANGLE/D3D11 on Windows)
+# WebGL 2 compatibility (optional - ANGLE on desktop platforms)
 option(MYSTRAL_USE_WEBGL "Enable ANGLE-backed WebGL 2 compatibility" OFF)
-set(MYSTRAL_ANGLE_ROOT "" CACHE PATH "ANGLE runtime root containing headers and Windows DLLs")
+set(MYSTRAL_ANGLE_ROOT "" CACHE PATH "ANGLE package root containing include/ and platform runtime libraries")
 
 # HTML5 parser and DOM core (optional - Lexbor)
 option(MYSTRAL_USE_LEXBOR "Enable Lexbor HTML5 template parsing" ON)
@@ -89,8 +89,8 @@ message(STATUS "HTML/DOM: Lexbor=${MYSTRAL_USE_LEXBOR}")
 set(THIRD_PARTY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 
 if(MYSTRAL_USE_WEBGL)
-    if(NOT WIN32)
-        message(FATAL_ERROR "MYSTRAL_USE_WEBGL currently supports Windows only")
+    if(NOT MYSTRAL_PLATFORM MATCHES "^(windows|linux|macos)$")
+        message(FATAL_ERROR "MYSTRAL_USE_WEBGL supports Windows, Linux, and macOS desktop builds")
     endif()
 
     if(NOT MYSTRAL_ANGLE_ROOT)
@@ -102,19 +102,67 @@ if(MYSTRAL_USE_WEBGL)
         set(MYSTRAL_ANGLE_INCLUDE_DIR "${MYSTRAL_ANGLE_ROOT}/src/native/angle-includes")
     endif()
 
-    set(MYSTRAL_ANGLE_RUNTIME_DIR "${MYSTRAL_ANGLE_ROOT}/bin")
-    if(EXISTS "${MYSTRAL_ANGLE_ROOT}/deps/windows/dll/libEGL.dll")
-        set(MYSTRAL_ANGLE_RUNTIME_DIR "${MYSTRAL_ANGLE_ROOT}/deps/windows/dll")
+    if(WIN32)
+        set(MYSTRAL_ANGLE_RUNTIME_FILES
+            "libEGL.dll"
+            "libGLESv2.dll"
+            "d3dcompiler_47.dll"
+        )
+        set(MYSTRAL_ANGLE_RUNTIME_CANDIDATES
+            "${MYSTRAL_ANGLE_ROOT}/bin"
+            "${MYSTRAL_ANGLE_ROOT}/deps/windows/dll"
+            "${MYSTRAL_ANGLE_ROOT}/out/Release"
+            "${MYSTRAL_ANGLE_ROOT}"
+        )
+    elseif(APPLE)
+        set(MYSTRAL_ANGLE_RUNTIME_FILES
+            "libEGL.dylib"
+            "libGLESv2.dylib"
+        )
+        set(MYSTRAL_ANGLE_RUNTIME_CANDIDATES
+            "${MYSTRAL_ANGLE_ROOT}/lib"
+            "${MYSTRAL_ANGLE_ROOT}/out/Release"
+            "${MYSTRAL_ANGLE_ROOT}"
+        )
+    else()
+        set(MYSTRAL_ANGLE_RUNTIME_FILES
+            "libEGL.so"
+            "libGLESv2.so"
+        )
+        set(MYSTRAL_ANGLE_RUNTIME_CANDIDATES
+            "${MYSTRAL_ANGLE_ROOT}/lib"
+            "${MYSTRAL_ANGLE_ROOT}/out/Release"
+            "${MYSTRAL_ANGLE_ROOT}"
+        )
     endif()
 
-    foreach(ANGLE_HEADER "EGL/egl.h" "EGL/eglext.h" "EGL/eglext_angle.h" "GLES3/gl3.h")
-        if(NOT EXISTS "${MYSTRAL_ANGLE_INCLUDE_DIR}/${ANGLE_HEADER}")
-            message(FATAL_ERROR "Missing ANGLE header: ${MYSTRAL_ANGLE_INCLUDE_DIR}/${ANGLE_HEADER}")
+    unset(MYSTRAL_ANGLE_RUNTIME_DIR)
+    foreach(ANGLE_RUNTIME_CANDIDATE IN LISTS MYSTRAL_ANGLE_RUNTIME_CANDIDATES)
+        set(ANGLE_RUNTIME_CANDIDATE_COMPLETE TRUE)
+        foreach(ANGLE_RUNTIME_FILE IN LISTS MYSTRAL_ANGLE_RUNTIME_FILES)
+            if(NOT EXISTS "${ANGLE_RUNTIME_CANDIDATE}/${ANGLE_RUNTIME_FILE}")
+                set(ANGLE_RUNTIME_CANDIDATE_COMPLETE FALSE)
+                break()
+            endif()
+        endforeach()
+        if(ANGLE_RUNTIME_CANDIDATE_COMPLETE)
+            set(MYSTRAL_ANGLE_RUNTIME_DIR "${ANGLE_RUNTIME_CANDIDATE}")
+            break()
         endif()
     endforeach()
-    foreach(ANGLE_DLL "libEGL.dll" "libGLESv2.dll" "d3dcompiler_47.dll")
-        if(NOT EXISTS "${MYSTRAL_ANGLE_RUNTIME_DIR}/${ANGLE_DLL}")
-            message(FATAL_ERROR "Missing ANGLE runtime: ${MYSTRAL_ANGLE_RUNTIME_DIR}/${ANGLE_DLL}")
+    if(NOT MYSTRAL_ANGLE_RUNTIME_DIR)
+        message(FATAL_ERROR "Complete ANGLE runtime not found below ${MYSTRAL_ANGLE_ROOT}")
+    endif()
+
+    foreach(ANGLE_HEADER
+            "EGL/egl.h"
+            "EGL/eglext.h"
+            "EGL/eglext_angle.h"
+            "GLES2/gl2ext.h"
+            "GLES3/gl3.h"
+            "KHR/khrplatform.h")
+        if(NOT EXISTS "${MYSTRAL_ANGLE_INCLUDE_DIR}/${ANGLE_HEADER}")
+            message(FATAL_ERROR "Missing ANGLE header: ${MYSTRAL_ANGLE_INCLUDE_DIR}/${ANGLE_HEADER}")
         endif()
     endforeach()
 
@@ -1142,6 +1190,9 @@ target_include_directories(mystral-runtime PRIVATE
 if(MYSTRAL_USE_WEBGL)
     target_include_directories(mystral-runtime PRIVATE ${MYSTRAL_ANGLE_INCLUDE_DIR})
     target_compile_definitions(mystral-runtime PUBLIC MYSTRAL_HAS_WEBGL)
+    if(CMAKE_DL_LIBS)
+        target_link_libraries(mystral-runtime PRIVATE ${CMAKE_DL_LIBS})
+    endif()
 endif()
 
 if(LEXBOR_FOUND)
@@ -1474,11 +1525,11 @@ if(NOT MYSTRAL_PLATFORM STREQUAL "ios" AND NOT MYSTRAL_PLATFORM STREQUAL "androi
     target_link_libraries(mystral PRIVATE mystral-runtime)
 
     if(MYSTRAL_USE_WEBGL)
-        foreach(ANGLE_DLL "libEGL.dll" "libGLESv2.dll" "d3dcompiler_47.dll")
+        foreach(ANGLE_RUNTIME_FILE IN LISTS MYSTRAL_ANGLE_RUNTIME_FILES)
             add_custom_command(TARGET mystral POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    "${MYSTRAL_ANGLE_RUNTIME_DIR}/${ANGLE_DLL}"
-                    "$<TARGET_FILE_DIR:mystral>/${ANGLE_DLL}"
+                    "${MYSTRAL_ANGLE_RUNTIME_DIR}/${ANGLE_RUNTIME_FILE}"
+                    "$<TARGET_FILE_DIR:mystral>/${ANGLE_RUNTIME_FILE}"
             )
         endforeach()
     endif()

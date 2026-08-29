@@ -1,6 +1,6 @@
 #include "mystral/webgl/context.h"
 
-#if defined(_WIN32) && defined(MYSTRAL_HAS_WEBGL)
+#if defined(MYSTRAL_HAS_WEBGL)
 
 #define GL_GLES_PROTOTYPES 0
 #include <GLES3/gl3.h>
@@ -19,7 +19,7 @@ namespace {
 
 js::Engine *g_engine = nullptr;
 bool g_debug = false;
-void *g_nativeWindow = nullptr;
+NativeWindow g_nativeWindow;
 bool g_windowContextClaimed = false;
 bool g_presentFailureLogged = false;
 std::vector<std::unique_ptr<Context>> g_contexts;
@@ -312,14 +312,45 @@ bool initBindings(js::Engine *engine, bool debug) {
   g_windowContextClaimed = false;
   g_presentFailureLogged = false;
 
+  g_nativeWindow = {};
   SDL_Window *sdlWindow = platform::getSDLWindow();
   if (sdlWindow) {
-    g_nativeWindow =
-        SDL_GetPointerProperty(SDL_GetWindowProperties(sdlWindow),
-                               SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
+    SDL_PropertiesID properties = SDL_GetWindowProperties(sdlWindow);
+#if defined(_WIN32)
+    void *window = SDL_GetPointerProperty(
+        properties, SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
+    if (window) {
+      g_nativeWindow = {NativeWindowPlatform::Win32, nullptr,
+                        reinterpret_cast<uintptr_t>(window)};
+    }
+#elif defined(__APPLE__)
+    void *layer = platform::getWebGLMetalLayer();
+    if (layer) {
+      g_nativeWindow = {NativeWindowPlatform::Metal, nullptr,
+                        reinterpret_cast<uintptr_t>(layer)};
+    }
+#elif defined(__linux__)
+    void *waylandDisplay = SDL_GetPointerProperty(
+        properties, SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER, nullptr);
+    void *waylandWindow = SDL_GetPointerProperty(
+        properties, SDL_PROP_WINDOW_WAYLAND_EGL_WINDOW_POINTER, nullptr);
+    if (waylandDisplay && waylandWindow) {
+      g_nativeWindow = {NativeWindowPlatform::Wayland, waylandDisplay,
+                        reinterpret_cast<uintptr_t>(waylandWindow)};
+    } else {
+      void *x11Display = SDL_GetPointerProperty(
+          properties, SDL_PROP_WINDOW_X11_DISPLAY_POINTER, nullptr);
+      const auto x11Window = static_cast<uintptr_t>(SDL_GetNumberProperty(
+          properties, SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0));
+      if (x11Display && x11Window) {
+        g_nativeWindow = {NativeWindowPlatform::X11, x11Display, x11Window};
+      }
+    }
+#endif
   }
   if (g_debug) {
-    std::cout << "[WebGL] Native window: " << g_nativeWindow << std::endl;
+    std::cout << "[WebGL] Native window: 0x" << std::hex
+              << g_nativeWindow.window << std::dec << std::endl;
   }
 
   return engine->evalScript(R"JS(
@@ -350,7 +381,7 @@ void presentContexts() {
 void shutdownBindings() {
   g_contexts.clear();
   g_engine = nullptr;
-  g_nativeWindow = nullptr;
+  g_nativeWindow = {};
   g_windowContextClaimed = false;
   g_presentFailureLogged = false;
 }
@@ -364,9 +395,11 @@ js::JSValueHandle createContextJSObject(js::Engine *engine, uint32_t width,
   g_engine = engine;
 
   auto context = std::make_unique<Context>();
-  void *nativeWindow = !g_windowContextClaimed ? g_nativeWindow : nullptr;
+  const NativeWindow nativeWindow =
+      !g_windowContextClaimed ? g_nativeWindow : NativeWindow{};
   ContextAttributes contextAttributes = attributes;
-  contextAttributes.allowNativeTextureInterop = nativeWindow != nullptr;
+  contextAttributes.allowNativeTextureInterop =
+      nativeWindow.platform == NativeWindowPlatform::Win32;
   if (!context->initialize(width, height, contextAttributes, nativeWindow)) {
     const std::string windowError = context->errorMessage();
     contextAttributes.allowNativeTextureInterop = false;

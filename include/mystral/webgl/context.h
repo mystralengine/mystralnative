@@ -21,6 +21,24 @@ struct ContextAttributes {
   bool allowNativeTextureInterop = false;
 };
 
+enum class NativeWindowPlatform {
+  None,
+  Win32,
+  Metal,
+  X11,
+  Wayland,
+};
+
+struct NativeWindow {
+  NativeWindowPlatform platform = NativeWindowPlatform::None;
+  void *display = nullptr;
+  uintptr_t window = 0;
+
+  explicit operator bool() const {
+    return platform != NativeWindowPlatform::None && window != 0;
+  }
+};
+
 struct ShaderPrecisionFormat {
   int32_t rangeMin = 0;
   int32_t rangeMax = 0;
@@ -43,7 +61,7 @@ public:
 
   bool initialize(uint32_t width, uint32_t height,
                   const ContextAttributes &attributes,
-                  void *nativeWindow = nullptr);
+                  const NativeWindow &nativeWindow = {});
   void shutdown();
   bool makeCurrent();
   bool present();
