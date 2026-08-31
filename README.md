@@ -98,6 +98,30 @@ cmake --build build --parallel
 ./build/mystral run examples/triangle.js
 ```
 
+### Experimental Desktop WebGL 2
+
+The optional ANGLE backend supports Windows (D3D11), Linux (Vulkan with X11 or Wayland), and macOS (Metal). Set `MYSTRAL_ANGLE_ROOT` to a package containing `include/EGL`, `include/GLES2`, `include/GLES3`, and `include/KHR`, plus the platform runtime libraries under `bin/` on Windows or `lib/` on Linux and macOS. Linux hosts also need a Vulkan loader, Vulkan driver, and XCB runtime; Wayland presentation additionally uses the system Wayland runtime libraries.
+
+```bash
+cmake -B build \
+  -DMYSTRAL_USE_WEBGL=ON \
+  -DMYSTRAL_ANGLE_ROOT=/path/to/angle-runtime
+cmake --build build --parallel
+./build/mystral run examples/webgl2-triangle.js
+```
+
+```powershell
+cmake -B build `
+  -DMYSTRAL_USE_WEBGL=ON `
+  -DMYSTRAL_ANGLE_ROOT=C:\path\to\angle-runtime
+cmake --build build --config Release
+.\build\Release\mystral.exe run examples\webgl2-triangle.js
+```
+
+The current milestone supports WebGL 2 context creation, shaders, buffers, textures, framebuffers, uniforms, instancing, GPU completion, pixel readback, and automatic SDL window presentation. Linux supports X11 and Wayland window surfaces plus a headless pbuffer fallback. macOS presents ANGLE through a dedicated Core Animation layer so its Metal surface does not replace Dawn's `CAMetalLayer`. The observed API surface of an unchanged Three.js r181 texture, shadow, render-target, and instancing workload is covered. The first WebGL context owns the native window surface; full WebGL IDL coverage and multi-canvas compositing remain in progress.
+
+Native HTML template parsing is available through [Lexbor v3](https://github.com/lexbor/lexbor). `MYSTRAL_USE_LEXBOR=ON` is the default when `third_party/lexbor` is present; run `node scripts/download-deps.mjs --only lexbor` to download the pinned source.
+
 ## What Can You Build?
 
 Here's a complete "Hello Triangle" — the traditional first GPU program:
@@ -384,12 +408,12 @@ All dependencies are downloaded automatically as prebuilt binaries:
 | SDL3 | Windowing, input, audio |
 | V8 / QuickJS / JSC | JavaScript engine |
 | Skia | Canvas 2D rendering |
-| libcurl | HTTP requests |
+| libcurl | HTTP and WebSocket requests |
 | libuv | Async I/O, timers, file watching |
 | Draco | Native Draco mesh decompression (optional) |
 | SWC | TypeScript transpiling |
 
-Prebuilt dependency binaries are managed via [mystralengine/library-builder](https://github.com/mystralengine/library-builder).
+Prebuilt dependency binaries are managed via [mystralengine/library-builder](https://github.com/mystralengine/library-builder). Desktop WebSocket support requires libcurl built with its `ws` and `wss` protocols enabled.
 
 ## Documentation
 

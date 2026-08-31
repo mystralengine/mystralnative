@@ -6,6 +6,7 @@
  */
 
 #include "mystral/platform/input.h"
+#include "mystral/platform/window.h"
 #include <iostream>
 #include <cstdlib>
 #include <SDL3/SDL.h>
@@ -29,6 +30,9 @@ struct Window {
     SDL_Window* sdlWindow = nullptr;
 #if defined(__APPLE__)
     SDL_MetalView metalView = nullptr;
+#if defined(MYSTRAL_HAS_WEBGL)
+    void* webglMetalLayer = nullptr;
+#endif
 #endif
     int width = 800;
     int height = 600;
@@ -71,7 +75,25 @@ bool createWindow(const char* title, int width, int height, bool fullscreen, boo
     flags |= SDL_WINDOW_VULKAN;
 #endif
 
+#if defined(__linux__) && defined(MYSTRAL_HAS_WEBGL)
+    SDL_PropertiesID createProperties = SDL_CreateProperties();
+    if (!createProperties) {
+        std::cerr << "[Window] SDL_CreateProperties failed: " << SDL_GetError() << std::endl;
+        return false;
+    }
+    SDL_SetStringProperty(createProperties, SDL_PROP_WINDOW_CREATE_TITLE_STRING, title);
+    SDL_SetNumberProperty(createProperties, SDL_PROP_WINDOW_CREATE_WIDTH_NUMBER, width);
+    SDL_SetNumberProperty(createProperties, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, height);
+    SDL_SetNumberProperty(createProperties, SDL_PROP_WINDOW_CREATE_FLAGS_NUMBER,
+                          static_cast<Sint64>(flags));
+    SDL_SetBooleanProperty(
+        createProperties,
+        SDL_PROP_WINDOW_CREATE_WAYLAND_CREATE_EGL_WINDOW_BOOLEAN, true);
+    g_window.sdlWindow = SDL_CreateWindowWithProperties(createProperties);
+    SDL_DestroyProperties(createProperties);
+#else
     g_window.sdlWindow = SDL_CreateWindow(title, width, height, flags);
+#endif
 
     if (!g_window.sdlWindow) {
         std::cerr << "[Window] SDL_CreateWindow failed: " << SDL_GetError() << std::endl;
@@ -97,6 +119,12 @@ bool createWindow(const char* title, int width, int height, bool fullscreen, boo
         std::cerr << "[Window] SDL_Metal_CreateView failed: " << SDL_GetError() << std::endl;
     } else {
         std::cout << "[Window] Metal view created" << std::endl;
+#if defined(MYSTRAL_HAS_WEBGL)
+        g_window.webglMetalLayer = createWebGLMetalLayer(g_window.metalView);
+        if (!g_window.webglMetalLayer) {
+            std::cerr << "[Window] Failed to create ANGLE presentation layer" << std::endl;
+        }
+#endif
     }
 #endif
 
@@ -111,6 +139,12 @@ void destroyWindow() {
     std::cout << "[Window] Destroying window..." << std::endl;
 
 #if defined(__APPLE__)
+#if defined(MYSTRAL_HAS_WEBGL)
+    if (g_window.webglMetalLayer) {
+        destroyWebGLMetalLayer(g_window.webglMetalLayer);
+        g_window.webglMetalLayer = nullptr;
+    }
+#endif
     if (g_window.metalView) {
         SDL_Metal_DestroyView(g_window.metalView);
         g_window.metalView = nullptr;
@@ -222,6 +256,14 @@ void* getMetalLayer() {
     }
 #endif
     return nullptr;
+}
+
+void* getWebGLMetalLayer() {
+#if defined(__APPLE__) && defined(MYSTRAL_HAS_WEBGL)
+    return g_window.webglMetalLayer;
+#else
+    return nullptr;
+#endif
 }
 
 /**

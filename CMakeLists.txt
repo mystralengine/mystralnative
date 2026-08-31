@@ -36,6 +36,13 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(MYSTRAL_USE_DAWN "Use Dawn WebGPU implementation" ON)  # Default - best compatibility
 option(MYSTRAL_USE_WGPU "Use wgpu-native WebGPU implementation" OFF)  # Alternative - has iOS support
 
+# WebGL 2 compatibility (optional - ANGLE on desktop platforms)
+option(MYSTRAL_USE_WEBGL "Enable ANGLE-backed WebGL 2 compatibility" OFF)
+set(MYSTRAL_ANGLE_ROOT "" CACHE PATH "ANGLE package root containing include/ and platform runtime libraries")
+
+# HTML5 parser and DOM core (optional - Lexbor)
+option(MYSTRAL_USE_LEXBOR "Enable Lexbor HTML5 template parsing" ON)
+
 # Ray Tracing (optional - hardware RT via DXR/Vulkan/Metal)
 option(MYSTRAL_USE_RAYTRACING "Enable hardware ray tracing support" OFF)
 
@@ -72,12 +79,123 @@ endif()
 message(STATUS "Mystral Platform: ${MYSTRAL_PLATFORM}")
 message(STATUS "JS Engine: V8=${MYSTRAL_USE_V8} JSC=${MYSTRAL_USE_JSC} QuickJS=${MYSTRAL_USE_QUICKJS}")
 message(STATUS "WebGPU: Dawn=${MYSTRAL_USE_DAWN} wgpu=${MYSTRAL_USE_WGPU}")
+message(STATUS "WebGL 2: ANGLE=${MYSTRAL_USE_WEBGL}")
+message(STATUS "HTML/DOM: Lexbor=${MYSTRAL_USE_LEXBOR}")
 
 # ============================================================================
 # Third Party Dependencies
 # ============================================================================
 
 set(THIRD_PARTY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
+
+if(MYSTRAL_USE_WEBGL)
+    if(NOT MYSTRAL_PLATFORM MATCHES "^(windows|linux|macos)$")
+        message(FATAL_ERROR "MYSTRAL_USE_WEBGL supports Windows, Linux, and macOS desktop builds")
+    endif()
+
+    if(NOT MYSTRAL_ANGLE_ROOT)
+        set(MYSTRAL_ANGLE_ROOT "${THIRD_PARTY_DIR}/angle")
+    endif()
+
+    set(MYSTRAL_ANGLE_INCLUDE_DIR "${MYSTRAL_ANGLE_ROOT}/include")
+    if(EXISTS "${MYSTRAL_ANGLE_ROOT}/src/native/angle-includes/EGL/egl.h")
+        set(MYSTRAL_ANGLE_INCLUDE_DIR "${MYSTRAL_ANGLE_ROOT}/src/native/angle-includes")
+    endif()
+
+    if(WIN32)
+        set(MYSTRAL_ANGLE_RUNTIME_FILES
+            "libEGL.dll"
+            "libGLESv2.dll"
+            "d3dcompiler_47.dll"
+        )
+        set(MYSTRAL_ANGLE_RUNTIME_CANDIDATES
+            "${MYSTRAL_ANGLE_ROOT}/bin"
+            "${MYSTRAL_ANGLE_ROOT}/deps/windows/dll"
+            "${MYSTRAL_ANGLE_ROOT}/out/Release"
+            "${MYSTRAL_ANGLE_ROOT}"
+        )
+    elseif(APPLE)
+        set(MYSTRAL_ANGLE_RUNTIME_FILES
+            "libEGL.dylib"
+            "libGLESv2.dylib"
+        )
+        set(MYSTRAL_ANGLE_RUNTIME_CANDIDATES
+            "${MYSTRAL_ANGLE_ROOT}/lib"
+            "${MYSTRAL_ANGLE_ROOT}/out/Release"
+            "${MYSTRAL_ANGLE_ROOT}"
+        )
+    else()
+        set(MYSTRAL_ANGLE_RUNTIME_FILES
+            "libEGL.so"
+            "libGLESv2.so"
+        )
+        set(MYSTRAL_ANGLE_RUNTIME_CANDIDATES
+            "${MYSTRAL_ANGLE_ROOT}/lib"
+            "${MYSTRAL_ANGLE_ROOT}/out/Release"
+            "${MYSTRAL_ANGLE_ROOT}"
+        )
+    endif()
+
+    unset(MYSTRAL_ANGLE_RUNTIME_DIR)
+    foreach(ANGLE_RUNTIME_CANDIDATE IN LISTS MYSTRAL_ANGLE_RUNTIME_CANDIDATES)
+        set(ANGLE_RUNTIME_CANDIDATE_COMPLETE TRUE)
+        foreach(ANGLE_RUNTIME_FILE IN LISTS MYSTRAL_ANGLE_RUNTIME_FILES)
+            if(NOT EXISTS "${ANGLE_RUNTIME_CANDIDATE}/${ANGLE_RUNTIME_FILE}")
+                set(ANGLE_RUNTIME_CANDIDATE_COMPLETE FALSE)
+                break()
+            endif()
+        endforeach()
+        if(ANGLE_RUNTIME_CANDIDATE_COMPLETE)
+            set(MYSTRAL_ANGLE_RUNTIME_DIR "${ANGLE_RUNTIME_CANDIDATE}")
+            break()
+        endif()
+    endforeach()
+    if(NOT MYSTRAL_ANGLE_RUNTIME_DIR)
+        message(FATAL_ERROR "Complete ANGLE runtime not found below ${MYSTRAL_ANGLE_ROOT}")
+    endif()
+
+    foreach(ANGLE_HEADER
+            "EGL/egl.h"
+            "EGL/eglext.h"
+            "EGL/eglext_angle.h"
+            "GLES2/gl2ext.h"
+            "GLES3/gl3.h"
+            "KHR/khrplatform.h")
+        if(NOT EXISTS "${MYSTRAL_ANGLE_INCLUDE_DIR}/${ANGLE_HEADER}")
+            message(FATAL_ERROR "Missing ANGLE header: ${MYSTRAL_ANGLE_INCLUDE_DIR}/${ANGLE_HEADER}")
+        endif()
+    endforeach()
+
+    message(STATUS "ANGLE headers: ${MYSTRAL_ANGLE_INCLUDE_DIR}")
+    message(STATUS "ANGLE runtime: ${MYSTRAL_ANGLE_RUNTIME_DIR}")
+endif()
+
+set(LEXBOR_FOUND OFF)
+if(MYSTRAL_USE_LEXBOR)
+    set(LEXBOR_DIR ${THIRD_PARTY_DIR}/lexbor)
+    file(GLOB LEXBOR_SOURCE_DIRS ${LEXBOR_DIR}/lexbor-*)
+    if(LEXBOR_SOURCE_DIRS)
+        list(GET LEXBOR_SOURCE_DIRS 0 LEXBOR_SOURCE_DIR)
+    elseif(EXISTS ${LEXBOR_DIR}/CMakeLists.txt)
+        set(LEXBOR_SOURCE_DIR ${LEXBOR_DIR})
+    endif()
+
+    if(LEXBOR_SOURCE_DIR AND EXISTS ${LEXBOR_SOURCE_DIR}/CMakeLists.txt)
+        set(LEXBOR_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+        set(LEXBOR_BUILD_STATIC ON CACHE BOOL "" FORCE)
+        set(LEXBOR_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+        set(LEXBOR_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+        set(LEXBOR_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+        set(LEXBOR_BUILD_UTILS OFF CACHE BOOL "" FORCE)
+        add_subdirectory(${LEXBOR_SOURCE_DIR} ${CMAKE_BINARY_DIR}/lexbor-build EXCLUDE_FROM_ALL)
+        if(TARGET lexbor_static)
+            set(LEXBOR_FOUND ON)
+            message(STATUS "Found Lexbor: ${LEXBOR_SOURCE_DIR}")
+        endif()
+    else()
+        message(STATUS "Lexbor not found - native HTML template parsing disabled. Run 'node scripts/download-deps.mjs --only lexbor' to enable.")
+    endif()
+endif()
 
 # SDL3 - Build from source as static library for single-binary distribution
 set(SDL3_DIR ${THIRD_PARTY_DIR}/sdl3)
@@ -992,6 +1110,7 @@ set(MYSTRAL_SOURCES
     src/utils/cgltf_impl.cpp
     src/http/http_client.cpp
     src/http/async_http_client.cpp
+    src/websocket/client.cpp
     src/webtransport/webtransport.cpp
     src/webtransport/webtransport_polyfill.cpp
     src/fs/async_file.cpp
@@ -1007,6 +1126,20 @@ set(MYSTRAL_SOURCES
     src/video/video_recorder.cpp
     src/video/gpu_readback_recorder.cpp
 )
+
+if(MYSTRAL_USE_WEBGL)
+    list(APPEND MYSTRAL_SOURCES
+        src/webgl/context.cpp
+        src/webgl/bindings.cpp
+    )
+endif()
+
+if(LEXBOR_FOUND)
+    list(APPEND MYSTRAL_SOURCES
+        src/dom/html_template.cpp
+        src/dom/bindings.cpp
+    )
+endif()
 
 # Ray tracing sources (conditional)
 if(MYSTRAL_USE_RAYTRACING)
@@ -1053,6 +1186,19 @@ target_include_directories(mystral-runtime PRIVATE
     ${THIRD_PARTY_DIR}/stb
     ${THIRD_PARTY_DIR}/cgltf
 )
+
+if(MYSTRAL_USE_WEBGL)
+    target_include_directories(mystral-runtime PRIVATE ${MYSTRAL_ANGLE_INCLUDE_DIR})
+    target_compile_definitions(mystral-runtime PUBLIC MYSTRAL_HAS_WEBGL)
+    if(CMAKE_DL_LIBS)
+        target_link_libraries(mystral-runtime PRIVATE ${CMAKE_DL_LIBS})
+    endif()
+endif()
+
+if(LEXBOR_FOUND)
+    target_link_libraries(mystral-runtime PRIVATE lexbor_static)
+    target_compile_definitions(mystral-runtime PUBLIC MYSTRAL_HAS_LEXBOR)
+endif()
 
 # Pass build configuration to source code
 # Determine JS engine name
@@ -1281,6 +1427,14 @@ else()
     find_package(CURL REQUIRED)
     find_package(ZLIB REQUIRED)
     target_link_libraries(mystral-runtime PUBLIC CURL::libcurl ZLIB::ZLIB)
+    if(WIN32 AND (VCPKG_TARGET_TRIPLET MATCHES "-static$" OR CURL_USE_STATIC_LIBS))
+        set_source_files_properties(
+            src/http/http_client.cpp
+            src/http/async_http_client.cpp
+            src/websocket/client.cpp
+            PROPERTIES COMPILE_DEFINITIONS CURL_STATICLIB
+        )
+    endif()
     message(STATUS "Found CURL: ${CURL_LIBRARIES}")
     message(STATUS "Found ZLIB: ${ZLIB_LIBRARIES}")
 endif()
@@ -1369,6 +1523,16 @@ endif()
 if(NOT MYSTRAL_PLATFORM STREQUAL "ios" AND NOT MYSTRAL_PLATFORM STREQUAL "android")
     add_executable(mystral src/cli/main.cpp)
     target_link_libraries(mystral PRIVATE mystral-runtime)
+
+    if(MYSTRAL_USE_WEBGL)
+        foreach(ANGLE_RUNTIME_FILE IN LISTS MYSTRAL_ANGLE_RUNTIME_FILES)
+            add_custom_command(TARGET mystral POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${MYSTRAL_ANGLE_RUNTIME_DIR}/${ANGLE_RUNTIME_FILE}"
+                    "$<TARGET_FILE_DIR:mystral>/${ANGLE_RUNTIME_FILE}"
+            )
+        endforeach()
+    endif()
 
     # Add webp include directories and definitions for video recording
     if(TARGET webp::mux)

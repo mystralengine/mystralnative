@@ -4,6 +4,8 @@
  * Gets the CAMetalLayer from SDL's Metal view for WebGPU surface creation.
  */
 
+#include "mystral/platform/window.h"
+
 #include <iostream>
 
 #if defined(__APPLE__)
@@ -39,6 +41,32 @@ void* getMetalLayerFromView(void* metalView) {
     std::cout << "[Surface] Got CAMetalLayer from SDL Metal view" << std::endl;
     return layer;
 }
+
+#if defined(MYSTRAL_HAS_WEBGL)
+void* createWebGLMetalLayer(void* metalView) {
+    CAMetalLayer* webgpuLayer =
+        (__bridge CAMetalLayer*)getMetalLayerFromView(metalView);
+    if (!webgpuLayer) {
+        return nullptr;
+    }
+
+    CALayer* webglLayer = [CALayer layer];
+    webglLayer.frame = webgpuLayer.bounds;
+    webglLayer.contentsScale = webgpuLayer.contentsScale;
+    webglLayer.autoresizingMask = kCALayerWidthSizable | kCALayerHeightSizable;
+    [webgpuLayer addSublayer:webglLayer];
+    std::cout << "[Surface] Created ANGLE presentation layer" << std::endl;
+    return (__bridge void*)webglLayer;
+}
+
+void destroyWebGLMetalLayer(void* metalLayer) {
+    if (!metalLayer) {
+        return;
+    }
+    CALayer* layer = (__bridge CALayer*)metalLayer;
+    [layer removeFromSuperlayer];
+}
+#endif
 
 /**
  * Get the drawable size of the Metal layer (accounts for Retina scaling)

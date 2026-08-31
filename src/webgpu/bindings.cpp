@@ -41,6 +41,10 @@
 // Canvas 2D context (Skia-backed)
 #include "mystral/canvas/canvas2d.h"
 
+#ifdef MYSTRAL_HAS_WEBGL
+#include "mystral/webgl/context.h"
+#endif
+
 // Forward declaration for Canvas2D bindings
 namespace mystral {
 namespace canvas {
@@ -56,6 +60,10 @@ struct OffscreenCanvas {
     int height = 150;
     mystral::js::JSValueHandle context2d;  // Cached 2D context (created on first getContext call)
     bool hasContext2d = false;
+#ifdef MYSTRAL_HAS_WEBGL
+    mystral::js::JSValueHandle contextWebGL2;
+    bool hasContextWebGL2 = false;
+#endif
 };
 
 // Global storage for offscreen canvases (prevents them from being destroyed)
@@ -89,6 +97,26 @@ static WGPUQueue g_queue = nullptr;
 static WGPUSurface g_surface = nullptr;
 static WGPUInstance g_instance = nullptr;
 static js::Engine* g_engine = nullptr;
+
+static js::JSValueHandle createStyleObject() {
+    auto style = g_engine->newObject();
+    g_engine->setProperty(style, "setProperty",
+        g_engine->newFunction("setProperty", [](void* ctx, const std::vector<js::JSValueHandle>& args) {
+            return g_engine->newUndefined();
+        })
+    );
+    g_engine->setProperty(style, "removeProperty",
+        g_engine->newFunction("removeProperty", [](void* ctx, const std::vector<js::JSValueHandle>& args) {
+            return g_engine->newUndefined();
+        })
+    );
+    g_engine->setProperty(style, "getPropertyValue",
+        g_engine->newFunction("getPropertyValue", [](void* ctx, const std::vector<js::JSValueHandle>& args) {
+            return g_engine->newString("");
+        })
+    );
+    return style;
+}
 
 // Offscreen rendering support (for no-SDL mode)
 static WGPUTexture g_offscreenTexture = nullptr;
@@ -359,6 +387,12 @@ bool initBindings(js::Engine* engine, void* wgpuInstance, void* wgpuDevice, void
     g_verboseLogging = debug;
 
     g_engine = engine;
+#ifdef MYSTRAL_HAS_WEBGL
+    if (!webgl::initBindings(engine, debug)) {
+        std::cerr << "[WebGL] Failed to initialize JavaScript bindings" << std::endl;
+        return false;
+    }
+#endif
     g_instance = (WGPUInstance)wgpuInstance;
     g_device = (WGPUDevice)wgpuDevice;
     g_queue = (WGPUQueue)wgpuQueue;
@@ -378,7 +412,7 @@ bool initBindings(js::Engine* engine, void* wgpuInstance, void* wgpuDevice, void
     // Create a mock parent element for the canvas (needed by Debugger)
     // ========================================================================
     auto parentElement = engine->newObject();
-    engine->setProperty(parentElement, "style", engine->newObject());
+    engine->setProperty(parentElement, "style", createStyleObject());
     engine->setProperty(parentElement, "appendChild",
         engine->newFunction("appendChild", [](void* ctx, const std::vector<js::JSValueHandle>& args) {
             // No-op in native runtime
@@ -418,8 +452,10 @@ bool initBindings(js::Engine* engine, void* wgpuInstance, void* wgpuDevice, void
     engine->setProperty(canvasObject, "height", engine->newNumber(g_canvasHeight));
     engine->setProperty(canvasObject, "clientWidth", engine->newNumber(g_canvasWidth));
     engine->setProperty(canvasObject, "clientHeight", engine->newNumber(g_canvasHeight));
+    engine->setProperty(canvasObject, "dataset", engine->newObject());
 
     // canvas.parentElement - mock parent element (for Debugger compatibility)
+    engine->setProperty(canvasObject, "style", createStyleObject());
     engine->setProperty(canvasObject, "parentElement", parentElement);
 
     // canvas.getContext('webgpu') -> GPUCanvasContext
@@ -447,6 +483,25 @@ bool initBindings(js::Engine* engine, void* wgpuInstance, void* wgpuDevice, void
 
                 return ctx2d;
             }
+
+#ifdef MYSTRAL_HAS_WEBGL
+            if (contextType == "webgl2") {
+                auto canvas = g_engine->getGlobalProperty("canvas");
+                auto cached = g_engine->getProperty(canvas, "_contextWebGL2");
+                if (!g_engine->isUndefined(cached) && !g_engine->isNull(cached)) {
+                    return cached;
+                }
+
+                auto context = webgl::createContextJSObject(
+                    g_engine, g_canvasWidth, g_canvasHeight,
+                    webgl::contextAttributesFromJS(g_engine, args));
+                if (!g_engine->isNull(context)) {
+                    g_engine->setProperty(context, "canvas", canvas);
+                    g_engine->setProperty(canvas, "_contextWebGL2", context);
+                }
+                return context;
+            }
+#endif
 
             if (contextType != "webgpu") {
                 std::cerr << "[Canvas] Unknown context type: " << contextType << std::endl;
@@ -609,6 +664,32 @@ bool initBindings(js::Engine* engine, void* wgpuInstance, void* wgpuDevice, void
         })
     );
 
+    engine->setProperty(existingDocument, "getElementsByClassName",
+        engine->newFunction("getElementsByClassName", [](void* ctx, const std::vector<js::JSValueHandle>& args) {
+            auto result = g_engine->newArray(1);
+            auto element = g_engine->newObject();
+            g_engine->setProperty(element, "style", createStyleObject());
+            g_engine->setPropertyIndex(result, 0, element);
+            return result;
+        })
+    );
+    engine->setProperty(existingDocument, "querySelectorAll",
+        engine->newFunction("querySelectorAll", [](void* ctx, const std::vector<js::JSValueHandle>& args) {
+            if (args.empty() || g_engine->toString(args[0]).empty()) {
+                return g_engine->newArray(0);
+            }
+            std::string selector = g_engine->toString(args[0]);
+            if (selector[0] != '.') {
+                return g_engine->newArray(0);
+            }
+            auto result = g_engine->newArray(1);
+            auto element = g_engine->newObject();
+            g_engine->setProperty(element, "style", createStyleObject());
+            g_engine->setPropertyIndex(result, 0, element);
+            return result;
+        })
+    );
+
     // Add createElement to existing document
     // NOTE: runtime.cpp sets up a createElement with canvas support (toDataURL) for @loaders.gl WebP detection
     // We ALWAYS override it here to add proper Canvas 2D support for offscreen canvases
@@ -623,14 +704,22 @@ bool initBindings(js::Engine* engine, void* wgpuInstance, void* wgpuDevice, void
             }
 
             // Add basic DOM element properties
-            g_engine->setProperty(element, "style", g_engine->newObject());
+            g_engine->setProperty(element, "style", createStyleObject());
+            g_engine->setProperty(element, "dataset", g_engine->newObject());
             g_engine->setProperty(element, "className", g_engine->newString(""));
-            g_engine->setProperty(element, "innerHTML", g_engine->newString(""));
+            if (tagName != "template" && tagName != "TEMPLATE") {
+                g_engine->setProperty(element, "innerHTML", g_engine->newString(""));
+            }
             g_engine->setProperty(element, "textContent", g_engine->newString(""));
             g_engine->setProperty(element, "tagName", g_engine->newString(tagName.c_str()));
             g_engine->setProperty(element, "appendChild",
                 g_engine->newFunction("appendChild", [](void* c, const std::vector<js::JSValueHandle>& a) {
                     return a.empty() ? g_engine->newUndefined() : a[0];
+                })
+            );
+            g_engine->setProperty(element, "append",
+                g_engine->newFunction("append", [](void* c, const std::vector<js::JSValueHandle>& a) {
+                    return g_engine->newUndefined();
                 })
             );
             g_engine->setProperty(element, "removeChild",
@@ -725,6 +814,38 @@ bool initBindings(js::Engine* engine, void* wgpuInstance, void* wgpuDevice, void
                         g_engine->protect(canvas->context2d);
                         return canvas->context2d;
                     }
+
+#ifdef MYSTRAL_HAS_WEBGL
+                    if (contextType == "webgl2") {
+                        if (canvas->hasContextWebGL2) {
+                            return canvas->contextWebGL2;
+                        }
+
+                        std::string globalName = "__offscreenCanvas_" + std::to_string(canvasId);
+                        auto canvasElement = g_engine->getGlobalProperty(globalName.c_str());
+                        if (!g_engine->isNull(canvasElement) && !g_engine->isUndefined(canvasElement)) {
+                            auto widthProp = g_engine->getProperty(canvasElement, "width");
+                            auto heightProp = g_engine->getProperty(canvasElement, "height");
+                            if (!g_engine->isUndefined(widthProp)) {
+                                canvas->width = static_cast<int>(g_engine->toNumber(widthProp));
+                            }
+                            if (!g_engine->isUndefined(heightProp)) {
+                                canvas->height = static_cast<int>(g_engine->toNumber(heightProp));
+                            }
+                        }
+
+                        canvas->contextWebGL2 = webgl::createContextJSObject(
+                            g_engine, static_cast<uint32_t>(canvas->width),
+                            static_cast<uint32_t>(canvas->height),
+                            webgl::contextAttributesFromJS(g_engine, contextArgs));
+                        if (!g_engine->isNull(canvas->contextWebGL2)) {
+                            g_engine->setProperty(canvas->contextWebGL2, "canvas", canvasElement);
+                            canvas->hasContextWebGL2 = true;
+                            g_engine->protect(canvas->contextWebGL2);
+                        }
+                        return canvas->contextWebGL2;
+                    }
+#endif
 
                     if (contextType == "webgpu") {
                         // Create GPUCanvasContext for offscreen canvas
@@ -861,8 +982,8 @@ bool initBindings(js::Engine* engine, void* wgpuInstance, void* wgpuDevice, void
                         return canvasContext;
                     }
 
-                    // Ignore webgl requests silently (PixiJS feature detection)
-                    if (contextType == "webgl" || contextType == "webgl2" || contextType == "experimental-webgl") {
+                    // WebGL 1 is not exposed until its compatibility profile is implemented.
+                    if (contextType == "webgl" || contextType == "experimental-webgl") {
                         return g_engine->newNull();
                     }
 
@@ -906,7 +1027,72 @@ bool initBindings(js::Engine* engine, void* wgpuInstance, void* wgpuDevice, void
                 );
             }
 
+#ifdef MYSTRAL_HAS_LEXBOR
+            if (tagName == "template" || tagName == "TEMPLATE") {
+                auto setTemplatePrototype =
+                    g_engine->getGlobalProperty("__mystralSetTemplatePrototype");
+                if (g_engine->isFunction(setTemplatePrototype)) {
+                    g_engine->call(setTemplatePrototype, g_engine->newUndefined(), {element});
+                }
+            }
+#endif
+
             return element;
+        })
+    );
+
+    // DOM libraries such as Three.js create canvases through the HTML namespace.
+    engine->setProperty(existingDocument, "createElementNS",
+        engine->newFunction("createElementNS", [](void* ctx, const std::vector<js::JSValueHandle>& args) {
+            if (args.size() < 2) {
+                return g_engine->newNull();
+            }
+            auto document = g_engine->getGlobalProperty("document");
+            auto createElement = g_engine->getProperty(document, "createElement");
+            return g_engine->call(createElement, document, {args[1]});
+        })
+    );
+    engine->setProperty(existingDocument, "createComment",
+        engine->newFunction("createComment", [](void* ctx, const std::vector<js::JSValueHandle>& args) {
+            auto comment = g_engine->newObject();
+            std::string text = args.empty() ? "" : g_engine->toString(args[0]);
+            g_engine->setProperty(comment, "nodeType", g_engine->newNumber(8));
+            g_engine->setProperty(comment, "data", g_engine->newString(text.c_str()));
+            g_engine->setProperty(comment, "textContent", g_engine->newString(text.c_str()));
+            g_engine->setProperty(comment, "remove",
+                g_engine->newFunction("remove", [](void* c, const std::vector<js::JSValueHandle>& a) {
+                    return g_engine->newUndefined();
+                })
+            );
+            return comment;
+        })
+    );
+    engine->setProperty(existingDocument, "createDocumentFragment",
+        engine->newFunction("createDocumentFragment", [](void* ctx, const std::vector<js::JSValueHandle>& args) {
+            auto fragment = g_engine->newObject();
+            g_engine->setProperty(fragment, "nodeType", g_engine->newNumber(11));
+            g_engine->setProperty(fragment, "childNodes", g_engine->newArray(0));
+            g_engine->setProperty(fragment, "children", g_engine->newArray(0));
+            g_engine->setProperty(fragment, "append",
+                g_engine->newFunction("append", [](void* c, const std::vector<js::JSValueHandle>& a) {
+                    return g_engine->newUndefined();
+                })
+            );
+            return fragment;
+        })
+    );
+    engine->setProperty(existingDocument, "importNode",
+        engine->newFunction("importNode", [](void* ctx, const std::vector<js::JSValueHandle>& args) {
+            if (args.empty()) {
+                return g_engine->newNull();
+            }
+            auto cloneNode = g_engine->getProperty(args[0], "cloneNode");
+            if (!g_engine->isFunction(cloneNode)) {
+                return args[0];
+            }
+            std::vector<js::JSValueHandle> cloneArgs;
+            cloneArgs.push_back(args.size() > 1 ? args[1] : g_engine->newBoolean(false));
+            return g_engine->call(cloneNode, args[0], cloneArgs);
         })
     );
 
@@ -917,7 +1103,11 @@ bool initBindings(js::Engine* engine, void* wgpuInstance, void* wgpuDevice, void
         engine->setProperty(existingDocument, "body", existingBody);
     }
     // Always add/update these methods on body
-    engine->setProperty(existingBody, "style", engine->newObject());
+    engine->setProperty(existingBody, "style", createStyleObject());
+    auto documentElement = engine->getProperty(existingDocument, "documentElement");
+    if (!engine->isUndefined(documentElement) && !engine->isNull(documentElement)) {
+        engine->setProperty(documentElement, "style", createStyleObject());
+    }
     engine->setProperty(existingBody, "appendChild",
         engine->newFunction("appendChild", [](void* ctx, const std::vector<js::JSValueHandle>& args) {
             return args.empty() ? g_engine->newUndefined() : args[0];
@@ -942,6 +1132,8 @@ bool initBindings(js::Engine* engine, void* wgpuInstance, void* wgpuDevice, void
     // PixiJS and other libraries check these for feature detection
     engine->setProperty(navigatorHandle, "userAgent",
         engine->newString("Mozilla/5.0 (Macintosh; MystralNative/0.1) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"));
+    engine->setProperty(navigatorHandle, "appVersion",
+        engine->newString("5.0 (MystralNative/0.1)"));
     engine->setProperty(navigatorHandle, "platform", engine->newString("MystralNative"));
     engine->setProperty(navigatorHandle, "vendor", engine->newString("Mystral Engine"));
     engine->setProperty(navigatorHandle, "language", engine->newString("en-US"));
@@ -4342,6 +4534,117 @@ async function createImageBitmap(source, options) {
 globalThis.createImageBitmap = createImageBitmap;
 globalThis.ImageBitmap = ImageBitmap;
 
+class FileReader {
+    constructor() {
+        this.result = null;
+        this.error = null;
+        this.readyState = FileReader.EMPTY;
+        this.onload = null;
+        this.onerror = null;
+        this.onloadend = null;
+        this._listeners = new Map();
+    }
+
+    addEventListener(type, callback) {
+        const listeners = this._listeners.get(type) || [];
+        listeners.push(callback);
+        this._listeners.set(type, listeners);
+    }
+
+    removeEventListener(type, callback) {
+        const listeners = this._listeners.get(type) || [];
+        this._listeners.set(type, listeners.filter(listener => listener !== callback));
+    }
+
+    _dispatch(type) {
+        const event = { type, target: this };
+        if (typeof this['on' + type] === 'function') this['on' + type](event);
+        for (const listener of this._listeners.get(type) || []) listener(event);
+    }
+
+    async _read(source, transform) {
+        this.readyState = FileReader.LOADING;
+        try {
+            const value = source && typeof source.arrayBuffer === 'function'
+                ? await source.arrayBuffer()
+                : source;
+            this.result = await transform(value);
+            this.readyState = FileReader.DONE;
+            this._dispatch('load');
+        } catch (error) {
+            this.error = error;
+            this.readyState = FileReader.DONE;
+            this._dispatch('error');
+        }
+        this._dispatch('loadend');
+    }
+
+    readAsArrayBuffer(source) {
+        return this._read(source, value => value instanceof ArrayBuffer ? value : value?.buffer);
+    }
+
+    readAsText(source) {
+        return this._read(source, value => new TextDecoder().decode(value));
+    }
+
+    readAsDataURL(source) {
+        return this._read(source, value => {
+            const bytes = new Uint8Array(value);
+            let binary = '';
+            for (const byte of bytes) binary += String.fromCharCode(byte);
+            return 'data:application/octet-stream;base64,' + btoa(binary);
+        });
+    }
+
+    abort() {
+        this.readyState = FileReader.DONE;
+        this._dispatch('abort');
+        this._dispatch('loadend');
+    }
+}
+FileReader.EMPTY = 0;
+FileReader.LOADING = 1;
+FileReader.DONE = 2;
+globalThis.FileReader = FileReader;
+
+if (typeof globalThis.Node === 'undefined') {
+    globalThis.Node = class Node {};
+}
+if (!Object.getOwnPropertyDescriptor(Node.prototype, 'firstChild')) {
+    Object.defineProperty(Node.prototype, 'firstChild', {
+        configurable: true,
+        get() { return this.childNodes?.[0] ?? this.children?.[0] ?? null; }
+    });
+}
+if (!Object.getOwnPropertyDescriptor(Node.prototype, 'nextSibling')) {
+    Object.defineProperty(Node.prototype, 'nextSibling', {
+        configurable: true,
+        get() {
+            const siblings = this.parentNode?.childNodes || this.parentNode?.children || [];
+            const index = Array.prototype.indexOf.call(siblings, this);
+            return index >= 0 ? siblings[index + 1] ?? null : null;
+        }
+    });
+}
+if (typeof Node.prototype.remove !== 'function') {
+    Node.prototype.remove = function() { this.parentNode?.removeChild?.(this); };
+}
+if (typeof globalThis.Text === 'undefined') {
+    globalThis.Text = class Text extends Node {};
+}
+if (typeof globalThis.Comment === 'undefined') {
+    globalThis.Comment = class Comment extends Node {};
+}
+if (typeof globalThis.DocumentFragment === 'undefined') {
+    globalThis.DocumentFragment = class DocumentFragment extends Node {};
+}
+if (typeof globalThis.Element === 'undefined') {
+    globalThis.Element = class Element extends Node {};
+}
+if (typeof globalThis.HTMLElement === 'undefined') {
+    globalThis.HTMLElement = class HTMLElement extends Element {};
+}
+
 // CanvasRenderingContext2D - Placeholder class for instanceof checks
 // The actual implementation is in Canvas2D bindings, this is just for type checking
 class CanvasRenderingContext2D {
@@ -4352,8 +4655,8 @@ class CanvasRenderingContext2D {
 globalThis.CanvasRenderingContext2D = CanvasRenderingContext2D;
 
 // HTMLCanvasElement - Placeholder class for instanceof checks
-class HTMLCanvasElement {
-    constructor() {}
+class HTMLCanvasElement extends HTMLElement {
+    constructor() { super(); }
 }
 globalThis.HTMLCanvasElement = HTMLCanvasElement;
 

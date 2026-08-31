@@ -2,10 +2,17 @@
 #include "mystral/platform/window.h"
 #include "mystral/platform/input.h"
 #include "mystral/webgpu/context.h"
+#ifdef MYSTRAL_HAS_WEBGL
+#include "mystral/webgl/context.h"
+#endif
 #include "mystral/js/engine.h"
 #include "mystral/js/module_system.h"
+#ifdef MYSTRAL_HAS_LEXBOR
+#include "mystral/dom/bindings.h"
+#endif
 #include "mystral/http/http_client.h"
 #include "mystral/http/async_http_client.h"
+#include "mystral/websocket/client.h"
 #include "mystral/webtransport/webtransport.h"
 #include "mystral/fs/async_file.h"
 #include "mystral/fs/file_watcher.h"
@@ -43,6 +50,7 @@
 #include <memory>
 #include <vector>
 #include <functional>
+#include <unordered_map>
 #include <unordered_set>
 #include <queue>
 #include <mutex>
@@ -411,8 +419,9 @@ public:
         // Set up Node.js-compatible process object (process.exit, etc.)
         setupProcess();
 
-        // Set up fetch API
+        // Set up fetch and WebSocket APIs
         setupFetch();
+        setupWebSocket();
 
         // Set up WebTransport API (QUIC/HTTP3 via quiche; stubbed if not built)
         webtransport::initBindings(jsEngine_.get());
@@ -425,6 +434,13 @@ public:
 
         // Set up DOM event system (document, window, addEventListener, etc.)
         setupDOMEvents();
+
+#ifdef MYSTRAL_HAS_LEXBOR
+        if (!dom::initBindings(jsEngine_.get(), config_.debug)) {
+            std::cerr << "[Mystral] Failed to initialize Lexbor DOM bindings" << std::endl;
+            return false;
+        }
+#endif
 
         // Set up localStorage/sessionStorage (file-backed persistence)
         setupStorage();
@@ -496,6 +512,15 @@ public:
         rt::cleanupRTBindings();
 #endif
 
+        // Stop WebSocket worker threads before libcurl is shut down by the HTTP client.
+        websocket::getClientManager().shutdown();
+        if (jsEngine_) {
+            for (auto& [id, callback] : webSocketCallbacks_) {
+                jsEngine_->unprotect(callback);
+            }
+        }
+        webSocketCallbacks_.clear();
+
         // Shutdown async HTTP client (cancels pending requests)
         http::getAsyncHttpClient().shutdown();
 
@@ -555,6 +580,11 @@ public:
             jsEngine_->gc();
             jsEngine_->gc();  // Run twice for good measure
         }
+
+#ifdef MYSTRAL_HAS_WEBGL
+        // Destroy ANGLE contexts while the SDL native window still exists.
+        webgl::shutdownBindings();
+#endif
 
         jsEngine_.reset();    // Release JS engine
         webgpu_.reset();      // Release WebGPU resources
@@ -771,7 +801,8 @@ public:
         // This must be called after runOnce() to invoke callbacks safely on the main thread
         http::getAsyncHttpClient().processCompletedRequests();
 
-        // Drive WebTransport QUIC sessions and dispatch their JS events (main thread)
+        // Dispatch WebSocket and WebTransport events on the JavaScript main thread.
+        processWebSocketEvents();
         webtransport::processEvents();
 
         // Process completed async file reads (queues their callbacks)
@@ -807,6 +838,11 @@ public:
 
         // Execute requestAnimationFrame callbacks (renders a frame)
         executeAnimationFrameCallbacks();
+
+#ifdef MYSTRAL_HAS_WEBGL
+        // WebGL drawing buffers are presented at the frame-compositing boundary.
+        webgl::presentContexts();
+#endif
 
         // Free non-protected handles, per-frame native allocations, and Dawn resources
         jsEngine_->clearFrameHandles();
@@ -1645,6 +1681,11 @@ private:
                 jsEngine_->setProperty(result, "ok", jsEngine_->newBoolean(response.ok));
                 jsEngine_->setProperty(result, "status", jsEngine_->newNumber(response.status));
                 jsEngine_->setProperty(result, "url", jsEngine_->newString(response.url.c_str()));
+                auto responseHeaders = jsEngine_->newObject();
+                for (const auto& [name, value] : response.headers) {
+                    jsEngine_->setProperty(responseHeaders, name.c_str(), jsEngine_->newString(value.c_str()));
+                }
+                jsEngine_->setProperty(result, "headers", responseHeaders);
 
                 if (!response.error.empty()) {
                     jsEngine_->setProperty(result, "error", jsEngine_->newString(response.error.c_str()));
@@ -1700,6 +1741,19 @@ private:
                             }
                         }
                     }
+
+                    auto headersVal = jsEngine_->getProperty(optObj, "headers");
+                    if (jsEngine_->isArray(headersVal)) {
+                        auto lengthVal = jsEngine_->getProperty(headersVal, "length");
+                        auto length = static_cast<uint32_t>(jsEngine_->toNumber(lengthVal));
+                        for (uint32_t index = 0; index < length; ++index) {
+                            auto pair = jsEngine_->getPropertyIndex(headersVal, index);
+                            if (!jsEngine_->isArray(pair)) continue;
+                            auto name = jsEngine_->toString(jsEngine_->getPropertyIndex(pair, 0));
+                            auto value = jsEngine_->toString(jsEngine_->getPropertyIndex(pair, 1));
+                            if (!name.empty()) options.headers[name] = value;
+                        }
+                    }
                 }
 
                 // Get and protect the callback
@@ -1718,6 +1772,11 @@ private:
                         engine->setProperty(result, "ok", engine->newBoolean(response.ok));
                         engine->setProperty(result, "status", engine->newNumber(response.status));
                         engine->setProperty(result, "url", engine->newString(response.url.c_str()));
+                        auto responseHeaders = engine->newObject();
+                        for (const auto& [name, value] : response.headers) {
+                            engine->setProperty(responseHeaders, name.c_str(), engine->newString(value.c_str()));
+                        }
+                        engine->setProperty(result, "headers", responseHeaders);
 
                         if (!response.error.empty()) {
                             engine->setProperty(result, "error", engine->newString(response.error.c_str()));
@@ -1950,7 +2009,13 @@ class Headers {
     }
 
     set(name, value) {
-        this._headers.set(name.toLowerCase(), value);
+        this._headers.set(name.toLowerCase(), String(value));
+    }
+
+    append(name, value) {
+        const key = name.toLowerCase();
+        const previous = this._headers.get(key);
+        this._headers.set(key, previous ? `${previous}, ${value}` : String(value));
     }
 
     has(name) {
@@ -2083,7 +2148,11 @@ async function fetch(input, options = {}) {
         // HTTP/HTTPS request via async libcurl + libuv (non-blocking)
         return new Promise((resolve, reject) => {
             if (signal) signal.addEventListener('abort', () => reject(abortError()));
-            __httpRequestAsync(url, options, (result) => {
+            const nativeOptions = {
+                ...options,
+                headers: options.headers ? [...new Headers(options.headers).entries()] : []
+            };
+            __httpRequestAsync(url, nativeOptions, (result) => {
                 if (result.error) {
                     reject(new Error('Fetch error: ' + result.error));
                 } else {
@@ -2091,7 +2160,8 @@ async function fetch(input, options = {}) {
                         ok: result.ok,
                         status: result.status,
                         statusText: result.ok ? 'OK' : 'Error',
-                        url: result.url || url
+                        url: result.url || url,
+                        headers: result.headers || {}
                     }));
                 }
             });
@@ -2141,6 +2211,173 @@ globalThis.Response = Response;
 
         jsEngine_->eval(fetchPolyfill, "fetch-polyfill.js");
         std::cout << "[Mystral] Fetch API initialized (file://, http://, https://)" << std::endl;
+
+        const char* xhrPolyfill = R"XHR(
+if (typeof globalThis.XMLHttpRequest === 'undefined') {
+    class XMLHttpRequest {
+        static UNSENT = 0;
+        static OPENED = 1;
+        static HEADERS_RECEIVED = 2;
+        static LOADING = 3;
+        static DONE = 4;
+
+        constructor() {
+            this.readyState = XMLHttpRequest.UNSENT;
+            this.response = null;
+            this.responseText = '';
+            this.responseType = '';
+            this.responseURL = '';
+            this.status = 0;
+            this.statusText = '';
+            this.timeout = 0;
+            this.withCredentials = false;
+            this.onreadystatechange = null;
+            this.onload = null;
+            this.onerror = null;
+            this.onloadend = null;
+            this.onabort = null;
+            this.onloadstart = null;
+            this.onprogress = null;
+            this.ontimeout = null;
+            this.responseXML = null;
+            this._method = 'GET';
+            this._url = '';
+            this._headers = new Headers();
+            this._responseHeaders = new Headers();
+            this._listeners = new Map();
+            this._aborted = false;
+            this.upload = { addEventListener() {}, removeEventListener() {} };
+        }
+
+        addEventListener(type, callback) {
+            const listeners = this._listeners.get(type) || [];
+            listeners.push(callback);
+            this._listeners.set(type, listeners);
+        }
+
+        removeEventListener(type, callback) {
+            const listeners = this._listeners.get(type) || [];
+            this._listeners.set(type, listeners.filter(listener => listener !== callback));
+        }
+
+        _dispatch(type, properties = {}) {
+            const event = { type, target: this, currentTarget: this, ...properties };
+            const handler = this['on' + type];
+            if (typeof handler === 'function') handler.call(this, event);
+            for (const listener of this._listeners.get(type) || []) listener.call(this, event);
+        }
+
+        _setReadyState(state) {
+            this.readyState = state;
+            this._dispatch('readystatechange');
+        }
+
+        open(method, url, async = true, username, password) {
+            if (!async) throw new Error('Synchronous XMLHttpRequest is not supported');
+            this._method = String(method || 'GET').toUpperCase();
+            this._url = String(url);
+            this._setReadyState(XMLHttpRequest.OPENED);
+        }
+
+        setRequestHeader(name, value) {
+            if (this.readyState !== XMLHttpRequest.OPENED) {
+                throw new Error('InvalidStateError');
+            }
+            this._headers.append(name, value);
+        }
+
+        getResponseHeader(name) {
+            return this._responseHeaders.get(name);
+        }
+
+        getAllResponseHeaders() {
+            return [...this._responseHeaders.entries()]
+                .map(([name, value]) => `${name}: ${value}\r\n`)
+                .join('');
+        }
+
+        overrideMimeType() {}
+
+        abort() {
+            this._aborted = true;
+            this.status = 0;
+            this.response = null;
+            this.responseText = '';
+            this._setReadyState(XMLHttpRequest.DONE);
+            this._dispatch('abort');
+            this._dispatch('loadend');
+        }
+
+        async send(body = null) {
+            if (this.readyState !== XMLHttpRequest.OPENED) {
+                throw new Error('InvalidStateError');
+            }
+            this._aborted = false;
+            let timeoutHandle = null;
+            if (this.timeout > 0) {
+                timeoutHandle = setTimeout(() => {
+                    if (this.readyState === XMLHttpRequest.DONE) return;
+                    this._aborted = true;
+                    this.status = 0;
+                    this._setReadyState(XMLHttpRequest.DONE);
+                    this._dispatch('timeout');
+                    this._dispatch('loadend');
+                }, this.timeout);
+            }
+            this._dispatch('loadstart');
+            try {
+                const response = await fetch(this._url, {
+                    method: this._method,
+                    headers: this._headers,
+                    body,
+                    credentials: this.withCredentials ? 'include' : 'same-origin'
+                });
+                if (this._aborted) return;
+
+                this.status = response.status;
+                this.statusText = response.statusText;
+                this.responseURL = response.url;
+                this._responseHeaders = response.headers;
+                this._setReadyState(XMLHttpRequest.HEADERS_RECEIVED);
+                this._setReadyState(XMLHttpRequest.LOADING);
+
+                const data = await response.arrayBuffer();
+                if (this._aborted) return;
+                const text = new TextDecoder().decode(data);
+                this._dispatch('progress', { loaded: data.byteLength, total: data.byteLength, lengthComputable: true });
+                switch (this.responseType) {
+                    case 'arraybuffer': this.response = data; break;
+                    case 'blob': this.response = new Blob([data]); break;
+                    case 'json': this.response = text ? JSON.parse(text) : null; break;
+                    case 'document': this.response = null; break;
+                    default:
+                        this.response = text;
+                        this.responseText = text;
+                        break;
+                }
+                if (timeoutHandle !== null) clearTimeout(timeoutHandle);
+                this._setReadyState(XMLHttpRequest.DONE);
+                this._dispatch('load');
+                this._dispatch('loadend');
+            } catch (error) {
+                if (this._aborted) return;
+                if (timeoutHandle !== null) clearTimeout(timeoutHandle);
+                this.status = 0;
+                this.statusText = '';
+                this._setReadyState(XMLHttpRequest.DONE);
+                this._dispatch('error');
+                this._dispatch('loadend');
+            }
+        }
+    }
+    for (const key of ['UNSENT', 'OPENED', 'HEADERS_RECEIVED', 'LOADING', 'DONE']) {
+        XMLHttpRequest.prototype[key] = XMLHttpRequest[key];
+    }
+    globalThis.XMLHttpRequest = XMLHttpRequest;
+}
+)XHR";
+        jsEngine_->eval(xhrPolyfill, "xhr-polyfill.js");
+        std::cout << "[Mystral] XMLHttpRequest API initialized" << std::endl;
 
         // --- WHATWG Streams -------------------------------------------------
         // Real (spec-shaped) ReadableStream / WritableStream / TransformStream
@@ -2437,6 +2674,221 @@ globalThis.Response = Response;
 )STREAMS";
         jsEngine_->eval(streamsPolyfill, "streams-polyfill.js");
         std::cout << "[Mystral] Web Streams API initialized (ReadableStream/WritableStream/TransformStream)" << std::endl;
+    }
+
+    void setupWebSocket() {
+        if (!jsEngine_) return;
+
+        jsEngine_->setGlobalProperty("__webSocketConnect",
+            jsEngine_->newFunction("__webSocketConnect", [this](void*, const std::vector<js::JSValueHandle>& args) {
+                if (args.size() < 3 || !jsEngine_->isFunction(args[2])) {
+                    jsEngine_->throwException("WebSocket connect requires a URL, protocols, and callback");
+                    return jsEngine_->newUndefined();
+                }
+                std::string url = jsEngine_->toString(args[0]);
+                std::vector<std::string> protocols;
+                if (jsEngine_->isArray(args[1])) {
+                    auto lengthValue = jsEngine_->getProperty(args[1], "length");
+                    auto length = static_cast<uint32_t>(jsEngine_->toNumber(lengthValue));
+                    protocols.reserve(length);
+                    for (uint32_t index = 0; index < length; ++index) {
+                        protocols.push_back(jsEngine_->toString(jsEngine_->getPropertyIndex(args[1], index)));
+                    }
+                }
+                auto callback = args[2];
+                jsEngine_->protect(callback);
+                uint64_t id = websocket::getClientManager().connect(url, protocols);
+                webSocketCallbacks_[id] = callback;
+                return jsEngine_->newNumber(static_cast<double>(id));
+            })
+        );
+
+        jsEngine_->setGlobalProperty("__webSocketSend",
+            jsEngine_->newFunction("__webSocketSend", [this](void*, const std::vector<js::JSValueHandle>& args) {
+                if (args.size() < 3) return jsEngine_->newBoolean(false);
+                uint64_t id = static_cast<uint64_t>(jsEngine_->toNumber(args[0]));
+                bool binary = jsEngine_->toBoolean(args[2]);
+                std::vector<uint8_t> data;
+                if (jsEngine_->isString(args[1])) {
+                    std::string text = jsEngine_->toString(args[1]);
+                    data.assign(text.begin(), text.end());
+                    binary = false;
+                } else {
+                    size_t size = 0;
+                    void* source = jsEngine_->getArrayBufferData(args[1], &size);
+                    if (!source && size > 0) return jsEngine_->newBoolean(false);
+                    if (size > 0) {
+                        auto* bytes = static_cast<uint8_t*>(source);
+                        data.assign(bytes, bytes + size);
+                    }
+                }
+                return jsEngine_->newBoolean(websocket::getClientManager().send(id, std::move(data), binary));
+            })
+        );
+
+        jsEngine_->setGlobalProperty("__webSocketClose",
+            jsEngine_->newFunction("__webSocketClose", [this](void*, const std::vector<js::JSValueHandle>& args) {
+                if (args.empty()) return jsEngine_->newUndefined();
+                uint64_t id = static_cast<uint64_t>(jsEngine_->toNumber(args[0]));
+                uint16_t code = args.size() > 1 ? static_cast<uint16_t>(jsEngine_->toNumber(args[1])) : 1000;
+                std::string reason = args.size() > 2 ? jsEngine_->toString(args[2]) : std::string{};
+                websocket::getClientManager().close(id, code, reason);
+                return jsEngine_->newUndefined();
+            })
+        );
+
+        const char* webSocketPolyfill = R"WEBSOCKET(
+(function () {
+    if (typeof globalThis.WebSocket !== 'undefined') return;
+
+    class WebSocket {
+        static CONNECTING = 0;
+        static OPEN = 1;
+        static CLOSING = 2;
+        static CLOSED = 3;
+
+        constructor(url, protocols = []) {
+            this.url = String(url);
+            this.readyState = WebSocket.CONNECTING;
+            this.bufferedAmount = 0;
+            this.extensions = '';
+            this.protocol = '';
+            this.binaryType = 'blob';
+            this.onopen = null;
+            this.onmessage = null;
+            this.onerror = null;
+            this.onclose = null;
+            this._listeners = new Map();
+
+            const protocolList = typeof protocols === 'string' ? [protocols] : Array.from(protocols || [], String);
+            if (new Set(protocolList).size !== protocolList.length) {
+                throw new Error('SyntaxError: duplicate WebSocket protocol');
+            }
+            this._id = __webSocketConnect(this.url, protocolList, event => this._handleNativeEvent(event));
+        }
+
+        addEventListener(type, callback) {
+            if (typeof callback !== 'function') return;
+            const listeners = this._listeners.get(type) || [];
+            listeners.push(callback);
+            this._listeners.set(type, listeners);
+        }
+
+        removeEventListener(type, callback) {
+            const listeners = this._listeners.get(type) || [];
+            this._listeners.set(type, listeners.filter(listener => listener !== callback));
+        }
+
+        dispatchEvent(event) {
+            event.target = this;
+            event.currentTarget = this;
+            const handler = this['on' + event.type];
+            if (typeof handler === 'function') handler.call(this, event);
+            for (const listener of this._listeners.get(event.type) || []) listener.call(this, event);
+            return true;
+        }
+
+        _handleNativeEvent(event) {
+            if (event.type === 'open') {
+                this.readyState = WebSocket.OPEN;
+                this.protocol = event.protocol || '';
+                this.dispatchEvent({ type: 'open' });
+                return;
+            }
+            if (event.type === 'message') {
+                let data = event.data;
+                if (event.binary && this.binaryType === 'blob') data = new Blob([data]);
+                this.dispatchEvent({ type: 'message', data, origin: this.url, lastEventId: '' });
+                return;
+            }
+            if (event.type === 'error') {
+                this.dispatchEvent({ type: 'error', message: event.message || 'WebSocket error' });
+                return;
+            }
+            if (event.type === 'close') {
+                this.readyState = WebSocket.CLOSED;
+                this.dispatchEvent({
+                    type: 'close',
+                    code: event.code,
+                    reason: event.reason || '',
+                    wasClean: !!event.wasClean
+                });
+            }
+        }
+
+        send(data) {
+            if (this.readyState === WebSocket.CONNECTING) throw new Error('InvalidStateError');
+            if (this.readyState !== WebSocket.OPEN) return;
+
+            let payload = data;
+            let binary = typeof data !== 'string';
+            if (typeof Blob !== 'undefined' && data instanceof Blob) payload = data._data;
+            if (binary && !(payload instanceof ArrayBuffer) && !ArrayBuffer.isView(payload)) {
+                throw new TypeError('WebSocket.send supports strings, ArrayBuffers, typed arrays, and Blobs');
+            }
+            this.bufferedAmount = typeof payload === 'string' ? payload.length : payload.byteLength;
+            if (!__webSocketSend(this._id, payload, binary)) throw new Error('WebSocket send failed');
+            this.bufferedAmount = 0;
+        }
+
+        close(code = 1000, reason = '') {
+            if (this.readyState === WebSocket.CLOSING || this.readyState === WebSocket.CLOSED) return;
+            if (code !== 1000 && (code < 3000 || code > 4999)) throw new Error('InvalidAccessError');
+            if (new TextEncoder().encode(String(reason)).byteLength > 123) throw new Error('SyntaxError');
+            this.readyState = WebSocket.CLOSING;
+            __webSocketClose(this._id, code, String(reason));
+        }
+    }
+
+    for (const key of ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED']) {
+        WebSocket.prototype[key] = WebSocket[key];
+    }
+    globalThis.WebSocket = WebSocket;
+})();
+)WEBSOCKET";
+        jsEngine_->eval(webSocketPolyfill, "websocket-polyfill.js");
+        std::cout << "[Mystral] WebSocket API initialized" << std::endl;
+    }
+
+    void processWebSocketEvents() {
+        if (!jsEngine_) return;
+        for (auto& event : websocket::getClientManager().pollEvents()) {
+            auto callbackIt = webSocketCallbacks_.find(event.connectionId);
+            if (callbackIt == webSocketCallbacks_.end()) continue;
+
+            auto value = jsEngine_->newObject();
+            switch (event.type) {
+                case websocket::EventType::Open:
+                    jsEngine_->setProperty(value, "type", jsEngine_->newString("open"));
+                    jsEngine_->setProperty(value, "protocol", jsEngine_->newString(event.protocol.c_str()));
+                    break;
+                case websocket::EventType::Message:
+                    jsEngine_->setProperty(value, "type", jsEngine_->newString("message"));
+                    jsEngine_->setProperty(value, "binary", jsEngine_->newBoolean(event.binary));
+                    if (event.binary) {
+                        jsEngine_->setProperty(value, "data", jsEngine_->newArrayBuffer(event.data.data(), event.data.size()));
+                    } else {
+                        jsEngine_->setProperty(value, "data", jsEngine_->newString(event.text.c_str()));
+                    }
+                    break;
+                case websocket::EventType::Error:
+                    jsEngine_->setProperty(value, "type", jsEngine_->newString("error"));
+                    jsEngine_->setProperty(value, "message", jsEngine_->newString(event.text.c_str()));
+                    break;
+                case websocket::EventType::Close:
+                    jsEngine_->setProperty(value, "type", jsEngine_->newString("close"));
+                    jsEngine_->setProperty(value, "code", jsEngine_->newNumber(event.closeCode));
+                    jsEngine_->setProperty(value, "reason", jsEngine_->newString(event.text.c_str()));
+                    jsEngine_->setProperty(value, "wasClean", jsEngine_->newBoolean(event.clean));
+                    break;
+            }
+
+            jsEngine_->call(callbackIt->second, jsEngine_->newUndefined(), {value});
+            if (event.type == websocket::EventType::Close) {
+                jsEngine_->unprotect(callbackIt->second);
+                webSocketCallbacks_.erase(callbackIt);
+            }
+        }
     }
 
     void setupURL() {
@@ -3385,6 +3837,7 @@ globalThis.__mystralNativeDecodeDracoAsync = function(buffer, attrs) {
     std::unique_ptr<js::Engine> jsEngine_;
     std::unique_ptr<js::ModuleSystem> moduleSystem_;
     storage::LocalStorage localStorage_;
+    std::unordered_map<uint64_t, js::JSValueHandle> webSocketCallbacks_;
 
     // requestAnimationFrame state
     struct RAFCallback {
@@ -3697,8 +4150,14 @@ globalThis.__mystralNativeDecodeDracoAsync = function(buffer, attrs) {
                 auto el = args[0];
                 auto onload = jsEngine_->getProperty(el, "onload");
                 if (!jsEngine_->isUndefined(onload) && !jsEngine_->isNull(onload)) {
-                    // Call onload via setTimeout to simulate async loading
-                    jsEngine_->eval("setTimeout(() => { arguments[0] && arguments[0](); }, 0);", "onload-trigger");
+                    // Schedule the callback through the runtime timer queue so script
+                    // loading remains asynchronous without relying on eval arguments.
+                    auto setTimeout = jsEngine_->getGlobalProperty("setTimeout");
+                    std::vector<js::JSValueHandle> timeoutArgs = {
+                        onload,
+                        jsEngine_->newNumber(0)
+                    };
+                    jsEngine_->call(setTimeout, jsEngine_->newUndefined(), timeoutArgs);
                 }
             }
             return jsEngine_->newUndefined();

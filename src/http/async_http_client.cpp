@@ -475,8 +475,13 @@ void AsyncHttpClient::request(const std::string& method,
             curl_easy_setopt(easy, CURLOPT_POSTFIELDS, ctx->postData.data());
             curl_easy_setopt(easy, CURLOPT_POSTFIELDSIZE, (long)ctx->postData.size());
         }
-    } else if (method == "DELETE") {
-        curl_easy_setopt(easy, CURLOPT_CUSTOMREQUEST, "DELETE");
+    } else if (method != "GET") {
+        curl_easy_setopt(easy, CURLOPT_CUSTOMREQUEST, method.c_str());
+        if (!body.empty()) {
+            ctx->postData = body;
+            curl_easy_setopt(easy, CURLOPT_POSTFIELDS, ctx->postData.data());
+            curl_easy_setopt(easy, CURLOPT_POSTFIELDSIZE, (long)ctx->postData.size());
+        }
     }
 
     // Set write callback
@@ -558,6 +563,7 @@ namespace http {
 
 struct AsyncHttpClient::Impl {
     bool initialized = false;
+    std::queue<std::pair<AsyncHttpCallback, HttpResponse>> completedQueue;
 };
 
 AsyncHttpClient& AsyncHttpClient::instance() {
@@ -579,20 +585,14 @@ bool AsyncHttpClient::isReady() const { return false; }
 void AsyncHttpClient::get(const std::string& url,
                           AsyncHttpCallback callback,
                           const HttpOptions& options) {
-    HttpResponse response;
-    response.ok = false;
-    response.error = "Async HTTP not available";
-    if (callback) callback(std::move(response));
+    request("GET", url, {}, std::move(callback), options);
 }
 
 void AsyncHttpClient::post(const std::string& url,
                            const std::vector<uint8_t>& body,
                            AsyncHttpCallback callback,
                            const HttpOptions& options) {
-    HttpResponse response;
-    response.ok = false;
-    response.error = "Async HTTP not available";
-    if (callback) callback(std::move(response));
+    request("POST", url, body, std::move(callback), options);
 }
 
 void AsyncHttpClient::request(const std::string& method,
@@ -602,13 +602,26 @@ void AsyncHttpClient::request(const std::string& method,
                               const HttpOptions& options) {
     HttpResponse response;
     response.ok = false;
+    response.url = url;
     response.error = "Async HTTP not available";
-    if (callback) callback(std::move(response));
+    if (callback) {
+        impl_->completedQueue.emplace(std::move(callback), std::move(response));
+    }
 }
 
 int AsyncHttpClient::activeRequestCount() const { return 0; }
 
-bool AsyncHttpClient::processCompletedRequests() { return false; }
+bool AsyncHttpClient::processCompletedRequests() {
+    const bool hadCallbacks = !impl_->completedQueue.empty();
+    while (!impl_->completedQueue.empty()) {
+        auto completed = std::move(impl_->completedQueue.front());
+        impl_->completedQueue.pop();
+        if (completed.first) {
+            completed.first(std::move(completed.second));
+        }
+    }
+    return hadCallbacks;
+}
 
 } // namespace http
 } // namespace mystral

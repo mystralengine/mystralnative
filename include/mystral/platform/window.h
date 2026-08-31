@@ -50,6 +50,21 @@ void* getMetalLayer();
 void* getMetalLayerFromView(void* metalView);
 
 /**
+ * Get the dedicated Core Animation layer used by ANGLE (macOS only)
+ */
+void* getWebGLMetalLayer();
+
+/**
+ * Create a dedicated Core Animation layer for ANGLE presentation (macOS only)
+ */
+void* createWebGLMetalLayer(void* metalView);
+
+/**
+ * Remove the dedicated ANGLE presentation layer (macOS only)
+ */
+void destroyWebGLMetalLayer(void* metalLayer);
+
+/**
  * Get drawable size of Metal layer (accounts for Retina)
  */
 void getMetalLayerDrawableSize(void* metalLayer, int* width, int* height);

@@ -177,6 +177,43 @@ js::JSValueHandle createGainNodeJS(js::Engine* engine, GainNode* nodePtr, js::JS
             return g_jsEngine->newUndefined();
         })
     );
+    const auto setGainValue = [nodePtr](void* ctx, const std::vector<js::JSValueHandle>& args) -> js::JSValueHandle {
+        if (!args.empty()) {
+            nodePtr->gain().setValue(static_cast<float>(g_jsEngine->toNumber(args[0])));
+        }
+        return g_jsEngine->newUndefined();
+    };
+    engine->setProperty(gainParam, "setValueAtTime",
+        engine->newFunction("setValueAtTime", setGainValue)
+    );
+    engine->setProperty(gainParam, "linearRampToValueAtTime",
+        engine->newFunction("linearRampToValueAtTime", setGainValue)
+    );
+    engine->setProperty(gainParam, "exponentialRampToValueAtTime",
+        engine->newFunction("exponentialRampToValueAtTime", setGainValue)
+    );
+    engine->setProperty(gainParam, "setTargetAtTime",
+        engine->newFunction("setTargetAtTime", setGainValue)
+    );
+    engine->setProperty(gainParam, "setValueCurveAtTime",
+        engine->newFunction("setValueCurveAtTime", [](void* ctx, const std::vector<js::JSValueHandle>& args) -> js::JSValueHandle {
+            return g_jsEngine->newUndefined();
+        })
+    );
+    engine->setProperty(gainParam, "cancelScheduledValues",
+        engine->newFunction("cancelScheduledValues", [](void* ctx, const std::vector<js::JSValueHandle>& args) -> js::JSValueHandle {
+            return g_jsEngine->newUndefined();
+        })
+    );
+    engine->setProperty(gainParam, "cancelAndHoldAtTime",
+        engine->newFunction("cancelAndHoldAtTime", [](void* ctx, const std::vector<js::JSValueHandle>& args) -> js::JSValueHandle {
+            return g_jsEngine->newUndefined();
+        })
+    );
+    auto setAudioParamPrototype = engine->getGlobalProperty("__mystralSetAudioParamPrototype");
+    if (engine->isFunction(setAudioParamPrototype)) {
+        engine->call(setAudioParamPrototype, engine->newUndefined(), {gainParam});
+    }
     engine->setProperty(jsNode, "gain", gainParam);
 
     // connect/disconnect
@@ -324,6 +361,32 @@ js::JSValueHandle createAudioContextJS(js::Engine* engine, AudioContext* ctxPtr)
  */
 void initializeAudioBindings(js::Engine* engine) {
     g_jsEngine = engine;
+
+    engine->evalScript(R"JS(
+if (typeof globalThis.AudioParam === "undefined") {
+    globalThis.AudioParam = class AudioParam {};
+}
+for (const method of [
+    'setValueAtTime',
+    'linearRampToValueAtTime',
+    'exponentialRampToValueAtTime',
+    'setTargetAtTime',
+    'setValueCurveAtTime',
+    'cancelScheduledValues',
+    'cancelAndHoldAtTime'
+]) {
+    if (typeof AudioParam.prototype[method] !== 'function') {
+        AudioParam.prototype[method] = function(value) {
+            if (value !== undefined) this.value = value;
+            return this;
+        };
+    }
+}
+globalThis.__mystralSetAudioParamPrototype = value => {
+    Object.setPrototypeOf(value, AudioParam.prototype);
+    return value;
+};
+)JS", "<audio-bindings>");
 
     // Create AudioContext constructor
     auto audioContextCtor = engine->newFunction("AudioContext",
